@@ -1,0 +1,14 @@
+services:
+  dte-gateway:
+    build:
+      context: ../../apps/dte-gateway
+      dockerfile: Dockerfile
+    container_name: dte-gateway
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../../.env.example
+    volumes:
+      - ../../apps/dte-gateway/app:/app/app
+      - ../../apps/dte-gateway/tests:/app/tests
+    restart: unless-stopped
