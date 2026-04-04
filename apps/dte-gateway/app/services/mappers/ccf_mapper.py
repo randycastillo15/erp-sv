@@ -7,7 +7,7 @@ IVA-exclusivo:
   IVA se calcula en el resumen: totalGravada × 0.13
   montoTotalOperacion = totalGravada + totalIva
 
-Receptor debe tener nit, nrc y cod_actividad. Lanza ValueError si faltan.
+Receptor debe tener los 9 campos requeridos por schema. Lanza ValueError si faltan.
 """
 
 from decimal import Decimal
@@ -20,6 +20,7 @@ from .common import (
     build_emisor,
     build_identificacion,
     build_pagos_default,
+    build_receptor_ccf_nc,
     fec_emi_str,
     hor_emi_str,
     round2,
@@ -36,13 +37,11 @@ def build_ccf(request: DTEEmitRequest, numero_control: str, codigo_generacion: s
     Construye el JSON completo del DTE tipo CCF (tipoDte=03).
 
     Raises:
-        ValueError: si el receptor no tiene nit o nrc (requeridos para CCF).
+        ValueError: si el receptor no tiene alguno de los 9 campos requeridos (nit, nrc, nombre,
+            codActividad, descActividad, direccion, correo).
     """
-    receptor = request.receptor
-    if not receptor.nit:
-        raise ValueError("CCF requiere NIT del receptor (sv_nit). Complete el campo en el Customer.")
-    if not receptor.nrc:
-        raise ValueError("CCF requiere NRC del receptor (sv_nrc). Complete el campo en el Customer.")
+    # Receptor completo — fail-fast en todos los campos requeridos por schema
+    receptor_dte = build_receptor_ccf_nc(request.receptor)
 
     s = request.emisor
     fec = fec_emi_str(request.posting_date)
@@ -59,23 +58,6 @@ def build_ccf(request: DTEEmitRequest, numero_control: str, codigo_generacion: s
     )
 
     emisor = build_emisor(s)
-
-    # ── Receptor ─────────────────────────────────────────────────────────────
-    receptor_dte = {
-        "nit": receptor.nit,
-        "nrc": receptor.nrc,
-        "nombre": receptor.nombre or "",
-        "codActividad": receptor.cod_actividad or "",
-        "descActividad": "",
-        "nombreComercial": None,
-        "direccion": {
-            "departamento": receptor.direccion_departamento or "06",
-            "municipio": receptor.direccion_municipio or "23",
-            "complemento": receptor.direccion_complemento or "",
-        },
-        "telefono": receptor.telefono,
-        "correo": receptor.correo,
-    }
 
     # ── Cuerpo del documento (ítems) ─────────────────────────────────────────
     cuerpo = []
@@ -121,11 +103,11 @@ def build_ccf(request: DTEEmitRequest, numero_control: str, codigo_generacion: s
         "totalExenta": round2(total_exenta),
         "totalGravada": round2(total_gravada),
         "subTotalVentas": round2(total_gravada + total_no_sujeta + total_exenta),
-        "descuNoSuj": "0.00",
-        "descuExenta": "0.00",
-        "descuGravada": "0.00",
-        "porcentajeDescuento": "0.00",
-        "totalDescu": "0.00",
+        "descuNoSuj": 0.00,
+        "descuExenta": 0.00,
+        "descuGravada": 0.00,
+        "porcentajeDescuento": 0.00,
+        "totalDescu": 0.00,
         "tributos": [
             {
                 "codigo": _TRIBUTO_IVA,
@@ -134,14 +116,14 @@ def build_ccf(request: DTEEmitRequest, numero_control: str, codigo_generacion: s
             }
         ] if total_iva > 0 else [],
         "subTotal": round2(total_gravada + total_no_sujeta + total_exenta),
-        "ivaPerci1": "0.00",
-        "ivaRete1": "0.00",
-        "reteRenta": "0.00",
+        "ivaPerci1": 0.00,
+        "ivaRete1": 0.00,
+        "reteRenta": 0.00,
         "montoTotalOperacion": round2(monto_total),
-        "totalNoGravado": "0.00",
+        "totalNoGravado": 0.00,
         "totalPagar": round2(monto_total),
         "totalLetras": amount_to_words(monto_total.quantize(Decimal("0.01"))),
-        "saldoFavor": "0.00",
+        "saldoFavor": 0.00,
         "condicionOperacion": request.condicion_operacion,
         "pagos": build_pagos_default(monto_total, request.condicion_operacion) or request.pagos or [],
         "numPagoElectronico": None,

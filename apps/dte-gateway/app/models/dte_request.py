@@ -28,6 +28,13 @@ class DTEItemRequest(BaseModel):
     codigo_interno: Optional[str] = None
 
 
+class DTEDireccionRequest(BaseModel):
+    """Dirección del receptor (CCF y NC)."""
+    departamento: str    # CAT-012
+    municipio: str       # CAT-013
+    complemento: str
+
+
 class DTEReceptorRequest(BaseModel):
     """Datos del receptor (cliente)."""
     nombre: Optional[str] = None
@@ -37,10 +44,10 @@ class DTEReceptorRequest(BaseModel):
     nrc: Optional[str] = None
     correo: Optional[str] = None
     telefono: Optional[str] = None
-    direccion_departamento: Optional[str] = None     # CAT-012
-    direccion_municipio: Optional[str] = None        # CAT-013
-    direccion_complemento: Optional[str] = None
     cod_actividad: Optional[str] = None              # CAT-019 (requerido para CCF)
+    desc_actividad: Optional[str] = None             # requerido para CCF/NC
+    nombre_comercial: Optional[str] = None           # nullable en schema, incluir siempre
+    direccion: Optional[DTEDireccionRequest] = None  # requerido para CCF/NC
 
 
 class DTEEmisorSettings(BaseModel):

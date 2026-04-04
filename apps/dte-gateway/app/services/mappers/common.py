@@ -8,7 +8,7 @@ from typing import Optional
 
 from num2words import num2words
 
-from app.models.dte_request import DTEEmisorSettings
+from app.models.dte_request import DTEEmisorSettings, DTEReceptorRequest
 
 
 def round8(value) -> float:
@@ -86,6 +86,30 @@ def build_emisor(s: DTEEmisorSettings) -> dict:
     }
 
 
+def build_emisor_nc(s: DTEEmisorSettings) -> dict:
+    """
+    Construye el bloque 'emisor' para NC (tipo 05).
+    NC schema omite codEstable/codEstableMH/codPuntoVenta/codPuntoVentaMH
+    respecto al emisor de CCF/FE.
+    """
+    return {
+        "nit":              s.nit,
+        "nrc":              s.nrc,
+        "nombre":           s.nombre,
+        "codActividad":     s.cod_actividad,
+        "descActividad":    s.desc_actividad,
+        "nombreComercial":  s.nombre_comercial,
+        "tipoEstablecimiento": s.tipo_establecimiento,
+        "direccion": {
+            "departamento": s.departamento,
+            "municipio":    s.municipio,
+            "complemento":  s.complemento,
+        },
+        "telefono": s.telefono,
+        "correo":   s.correo,
+    }
+
+
 def build_pagos_default(total: Decimal, condicion: int) -> list[dict]:
     """
     Construye la lista de pagos por defecto.
@@ -98,6 +122,46 @@ def build_pagos_default(total: Decimal, condicion: int) -> list[dict]:
     if condicion == 2:
         return [{"codigo": "03", "montoPago": round2(total), "referencia": None, "plazo": None, "periodo": None}]
     return []
+
+
+def build_receptor_ccf_nc(receptor: DTEReceptorRequest) -> dict:
+    """
+    Construye el bloque receptor para CCF (03) y NC (05).
+    Valida fail-fast los campos requeridos por schema fe-ccf-v3.json / fe-nc-v3.json.
+
+    Schema exige: nit, nrc, nombre, codActividad, descActividad, nombreComercial (nullable),
+    direccion (obj con departamento+municipio+complemento), telefono (nullable), correo (string).
+    """
+    if not receptor.nit:
+        raise ValueError("CCF/NC requiere nit del receptor")
+    if not receptor.nrc:
+        raise ValueError("CCF/NC requiere nrc del receptor")
+    if not receptor.nombre:
+        raise ValueError("CCF/NC requiere nombre del receptor")
+    if not receptor.cod_actividad:
+        raise ValueError("CCF/NC requiere codActividad del receptor")
+    if not receptor.desc_actividad:
+        raise ValueError("CCF/NC requiere descActividad del receptor")
+    if not receptor.direccion:
+        raise ValueError("CCF/NC requiere direccion del receptor (departamento, municipio, complemento)")
+    if not receptor.correo:
+        raise ValueError("CCF/NC requiere correo del receptor (schema: string no-null)")
+
+    return {
+        "nit":             (receptor.nit or "").replace("-", ""),
+        "nrc":             (receptor.nrc or "").replace("-", ""),
+        "nombre":          receptor.nombre,
+        "codActividad":    receptor.cod_actividad,
+        "descActividad":   receptor.desc_actividad,
+        "nombreComercial": receptor.nombre_comercial or None,
+        "direccion": {
+            "departamento": receptor.direccion.departamento,
+            "municipio":    receptor.direccion.municipio,
+            "complemento":  receptor.direccion.complemento,
+        },
+        "telefono": receptor.telefono or None,
+        "correo":   receptor.correo,
+    }
 
 
 def fec_emi_str(posting_date: date) -> str:

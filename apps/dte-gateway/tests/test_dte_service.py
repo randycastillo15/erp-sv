@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models.dte_request import (
+    DTEDireccionRequest,
     DTEEmitRequest,
     DTEEmisorSettings,
     DTEItemRequest,
@@ -22,6 +23,36 @@ def in_memory_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store_module, "_DB_PATH", db_path)
     store_module._init_db()
     yield
+
+
+_EMISOR_SETTINGS = dict(
+    nit="06140101911019",
+    nrc="123456-7",
+    nombre="Mi Empresa SV",
+    cod_actividad="47191",
+    desc_actividad="Comercio",
+    tipo_establecimiento="02",
+    cod_estable_mh="0001",
+    cod_estable="0001",
+    cod_punto_venta_mh="0001",
+    cod_punto_venta="0001",
+    departamento="06",
+    municipio="23",
+    complemento="Calle 1",
+    url_firmador="http://localhost:8113/firma/firmardocumento/",
+)
+
+_RECEPTOR_CCF_COMPLETO = DTEReceptorRequest(
+    nombre="Empresa Receptora SA",
+    nit="06140101911020",
+    nrc="987654-3",
+    cod_actividad="47191",
+    desc_actividad="Comercio al por mayor",
+    nombre_comercial="Empresa Receptora",
+    direccion=DTEDireccionRequest(departamento="06", municipio="23", complemento="Calle 2"),
+    correo="receptor@empresa.com.sv",
+    telefono="22222222",
+)
 
 
 @pytest.fixture
@@ -45,24 +76,66 @@ def base_request() -> DTEEmitRequest:
         ],
         grand_total=Decimal("11.30"),
         total_iva=Decimal("1.30"),
-        emisor=DTEEmisorSettings(
-            nit="06140101911019",
-            nrc="123456-7",
-            nombre="Mi Empresa SV",
-            cod_actividad="47191",
-            desc_actividad="Comercio",
-            tipo_establecimiento="02",
-            cod_estable_mh="0001",
-            cod_estable="0001",
-            cod_punto_venta_mh="0001",
-            cod_punto_venta="0001",
-            departamento="06",
-            municipio="23",
-            complemento="Calle 1",
-            url_firmador="http://localhost:8113/firma/firmardocumento/",
-        ),
+        emisor=DTEEmisorSettings(**_EMISOR_SETTINGS),
         idempotency_key="test:Sales Invoice:SINV-SVC-001:01:00",
-        skip_schema_validation=True,  # tests de unit no tienen schema real
+        skip_schema_validation=True,
+    )
+
+
+@pytest.fixture
+def ccf_request() -> DTEEmitRequest:
+    return DTEEmitRequest(
+        tipo_dte="03",
+        ambiente="00",
+        docname="SINV-SVC-CCF",
+        company="Mi Empresa SV",
+        posting_date=date(2026, 4, 1),
+        receptor=_RECEPTOR_CCF_COMPLETO,
+        items=[
+            DTEItemRequest(
+                num_item=1,
+                tipo_item=2,
+                descripcion="Servicio",
+                cantidad=Decimal("1"),
+                precio_unitario=Decimal("10"),
+                venta_gravada=Decimal("10"),
+            )
+        ],
+        grand_total=Decimal("11.30"),
+        total_iva=Decimal("1.30"),
+        emisor=DTEEmisorSettings(**_EMISOR_SETTINGS),
+        idempotency_key="test:Sales Invoice:SINV-SVC-CCF:03:00",
+        skip_schema_validation=True,
+    )
+
+
+@pytest.fixture
+def nc_request() -> DTEEmitRequest:
+    return DTEEmitRequest(
+        tipo_dte="05",
+        ambiente="00",
+        docname="SINV-SVC-NC",
+        company="Mi Empresa SV",
+        posting_date=date(2026, 4, 1),
+        receptor=_RECEPTOR_CCF_COMPLETO,
+        items=[
+            DTEItemRequest(
+                num_item=1,
+                tipo_item=2,
+                descripcion="Servicio",
+                cantidad=Decimal("1"),
+                precio_unitario=Decimal("10"),
+                venta_gravada=Decimal("10"),
+            )
+        ],
+        grand_total=Decimal("11.30"),
+        total_iva=Decimal("1.30"),
+        emisor=DTEEmisorSettings(**_EMISOR_SETTINGS),
+        idempotency_key="test:Sales Invoice:SINV-SVC-NC:05:00",
+        skip_schema_validation=True,
+        documento_relacionado_codigo="A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+        documento_relacionado_tipo="03",
+        documento_relacionado_fecha=date(2026, 3, 31),
     )
 
 
@@ -124,3 +197,56 @@ def test_tipo_dte_no_soportado_lanza_key_error(base_request):
 def test_error_firmador_lanza_runtime(mock_auth, mock_sign, base_request):
     with pytest.raises(RuntimeError, match="Firmador"):
         dte_service.emit(base_request)
+
+
+# ---------------------------------------------------------------------------
+# CCF (tipo 03) — regresión + receptor completo
+# ---------------------------------------------------------------------------
+
+@patch("app.services.dte_service.signer_client.sign_dte", return_value="jws.header.sig")
+@patch("app.services.dte_service.auth_client.get_token", return_value="bearer-token")
+@patch("app.services.dte_service.mh_client.send_dte", return_value=_mock_mh_procesado())
+def test_emit_ccf_procesado(mock_mh, mock_auth, mock_sign, ccf_request):
+    response = dte_service.emit(ccf_request)
+    assert response.status == "procesado"
+    assert response.estado == "PROCESADO"
+    assert response.sello_recibido == "SELLO-123"
+    assert response.control_number.startswith("DTE-03-")
+
+
+@patch("app.services.dte_service.signer_client.sign_dte", return_value="jws.header.sig")
+@patch("app.services.dte_service.auth_client.get_token", return_value="bearer-token")
+@patch("app.services.dte_service.mh_client.send_dte", return_value=_mock_mh_procesado())
+def test_emit_ccf_idempotencia(mock_mh, mock_auth, mock_sign, ccf_request):
+    r1 = dte_service.emit(ccf_request)
+    r2 = dte_service.emit(ccf_request)
+    assert r1.generation_code == r2.generation_code
+    assert mock_mh.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# NC (tipo 05) — regresión + documento relacionado
+# ---------------------------------------------------------------------------
+
+@patch("app.services.dte_service.signer_client.sign_dte", return_value="jws.header.sig")
+@patch("app.services.dte_service.auth_client.get_token", return_value="bearer-token")
+@patch("app.services.dte_service.mh_client.send_dte", return_value=_mock_mh_procesado())
+def test_emit_nc_procesado(mock_mh, mock_auth, mock_sign, nc_request):
+    response = dte_service.emit(nc_request)
+    assert response.status == "procesado"
+    assert response.estado == "PROCESADO"
+    assert response.control_number.startswith("DTE-05-")
+
+
+# ---------------------------------------------------------------------------
+# FE regresión — debe seguir funcionando después de cambios Sprint 3
+# ---------------------------------------------------------------------------
+
+@patch("app.services.dte_service.signer_client.sign_dte", return_value="jws.header.sig")
+@patch("app.services.dte_service.auth_client.get_token", return_value="bearer-token")
+@patch("app.services.dte_service.mh_client.send_dte", return_value=_mock_mh_procesado())
+def test_emit_fe_no_regresiona(mock_mh, mock_auth, mock_sign, base_request):
+    """FE debe funcionar sin cambios tras Sprint 3."""
+    response = dte_service.emit(base_request)
+    assert response.status == "procesado"
+    assert response.control_number.startswith("DTE-01-")
