@@ -11,8 +11,10 @@ import time
 import requests
 
 from app.config import (
+    MH_CONTINGENCY_PATH,
     MH_ENDPOINT_PROD,
     MH_ENDPOINT_TEST,
+    MH_INVALIDATION_PATH,
     MH_QUERY_DTE_PATH,
     MH_RECEIVE_PATH,
     MH_SEND_RETRIES,
@@ -116,6 +118,166 @@ def send_dte(
 
     raise RuntimeError(
         f"MH no respondió después de {MH_SEND_RETRIES} intentos: {last_exc}"
+    )
+
+
+def send_anulacion(
+    jws: str,
+    codigo_generacion: str,
+    ambiente: str,
+    token: str,
+    id_envio: int = 1,
+) -> dict:
+    """
+    Envía un evento de invalidación firmado al MH.
+
+    Schema anulacion-v2 → version=2, sin tipoDte en el body de transporte.
+
+    Args:
+        jws:               JWS compact serialization del evento de anulación.
+        codigo_generacion: UUID v4 uppercase del evento (NO del DTE a anular).
+        ambiente:          "00"=pruebas, "01"=producción.
+        token:             Bearer token.
+        id_envio:          Correlativo de envío.
+
+    Returns:
+        Dict con la respuesta del MH (estado, selloRecibido, etc.).
+
+    Raises:
+        RuntimeError: si todos los reintentos fallan.
+    """
+    url = f"{_base_url(ambiente)}{MH_INVALIDATION_PATH}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": "dte-gateway/2.0",
+    }
+    body = {
+        "ambiente":         ambiente,
+        "idEnvio":          id_envio,
+        "version":          2,
+        "documento":        jws,
+        "codigoGeneracion": codigo_generacion,
+    }
+
+    last_exc: Exception | None = None
+    for attempt in range(1, MH_SEND_RETRIES + 1):
+        try:
+            logger.info(
+                "mh_client: enviando anulación al MH ambiente=%s gen=%s intento=%d/%d",
+                ambiente, codigo_generacion, attempt, MH_SEND_RETRIES,
+            )
+            response = requests.post(
+                url, json=body, headers=headers, timeout=MH_SEND_TIMEOUT,
+            )
+            if 400 <= response.status_code < 500:
+                response.raise_for_status()
+            response.raise_for_status()
+            result = response.json()
+            logger.info(
+                "mh_client: anulación MH estado=%s sello=%s",
+                result.get("estado"), result.get("selloRecibido"),
+            )
+            return result
+        except requests.exceptions.Timeout as exc:
+            last_exc = exc
+            logger.warning("mh_client: anulación timeout intento %d/%d", attempt, MH_SEND_RETRIES)
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and 400 <= exc.response.status_code < 500:
+                raise RuntimeError(
+                    f"MH rechazó la anulación (HTTP {exc.response.status_code}): {exc.response.text}"
+                ) from exc
+            last_exc = exc
+            logger.warning("mh_client: anulación HTTP error intento %d/%d: %s", attempt, MH_SEND_RETRIES, exc)
+        except requests.exceptions.ConnectionError as exc:
+            last_exc = exc
+            logger.warning("mh_client: anulación connection error intento %d/%d: %s", attempt, MH_SEND_RETRIES, exc)
+
+        if attempt < MH_SEND_RETRIES:
+            time.sleep(MH_SEND_RETRY_SLEEP)
+
+    raise RuntimeError(
+        f"MH no respondió a la anulación después de {MH_SEND_RETRIES} intentos: {last_exc}"
+    )
+
+
+def send_contingencia(
+    jws: str,
+    codigo_generacion: str,
+    ambiente: str,
+    token: str,
+    id_envio: int = 1,
+) -> dict:
+    """
+    Envía un evento de contingencia (tipo 14) firmado al MH.
+
+    Schema contingencia-v3 → version=3.
+
+    Args:
+        jws:               JWS compact serialization del evento.
+        codigo_generacion: UUID v4 uppercase del evento de contingencia.
+        ambiente:          "00"=pruebas, "01"=producción.
+        token:             Bearer token.
+        id_envio:          Correlativo de envío.
+
+    Returns:
+        Dict con la respuesta del MH.
+
+    Raises:
+        RuntimeError: si todos los reintentos fallan.
+    """
+    url = f"{_base_url(ambiente)}{MH_CONTINGENCY_PATH}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": "dte-gateway/2.0",
+    }
+    body = {
+        "ambiente":         ambiente,
+        "idEnvio":          id_envio,
+        "version":          3,
+        "documento":        jws,
+        "codigoGeneracion": codigo_generacion,
+    }
+
+    last_exc: Exception | None = None
+    for attempt in range(1, MH_SEND_RETRIES + 1):
+        try:
+            logger.info(
+                "mh_client: enviando contingencia al MH ambiente=%s gen=%s intento=%d/%d",
+                ambiente, codigo_generacion, attempt, MH_SEND_RETRIES,
+            )
+            response = requests.post(
+                url, json=body, headers=headers, timeout=MH_SEND_TIMEOUT,
+            )
+            if 400 <= response.status_code < 500:
+                response.raise_for_status()
+            response.raise_for_status()
+            result = response.json()
+            logger.info(
+                "mh_client: contingencia MH estado=%s sello=%s",
+                result.get("estado"), result.get("selloRecibido"),
+            )
+            return result
+        except requests.exceptions.Timeout as exc:
+            last_exc = exc
+            logger.warning("mh_client: contingencia timeout intento %d/%d", attempt, MH_SEND_RETRIES)
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and 400 <= exc.response.status_code < 500:
+                raise RuntimeError(
+                    f"MH rechazó el evento de contingencia (HTTP {exc.response.status_code}): {exc.response.text}"
+                ) from exc
+            last_exc = exc
+            logger.warning("mh_client: contingencia HTTP error intento %d/%d: %s", attempt, MH_SEND_RETRIES, exc)
+        except requests.exceptions.ConnectionError as exc:
+            last_exc = exc
+            logger.warning("mh_client: contingencia connection error intento %d/%d: %s", attempt, MH_SEND_RETRIES, exc)
+
+        if attempt < MH_SEND_RETRIES:
+            time.sleep(MH_SEND_RETRY_SLEEP)
+
+    raise RuntimeError(
+        f"MH no respondió al evento de contingencia después de {MH_SEND_RETRIES} intentos: {last_exc}"
     )
 
 

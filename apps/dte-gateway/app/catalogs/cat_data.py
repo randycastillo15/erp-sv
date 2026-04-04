@@ -94,11 +94,12 @@ CAT_017: dict[str, str] = {
 }
 
 # CAT-022 — Tipo de Documento de Identificación del Receptor
+# Fuente autoritativa: enum en anulacion-schema-v2.json
 CAT_022: dict[str, str] = {
+    "36": "NIT",
     "13": "DUI",
-    "02": "NIT",
+    "02": "Carnet de residente",
     "03": "Pasaporte",
-    "36": "NRC",
     "37": "Otro",
 }
 

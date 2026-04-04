@@ -61,6 +61,27 @@ def _init_db() -> None:
                 updated_at      TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS anulaciones (
+                idempotency_key              TEXT PRIMARY KEY,
+                codigo_generacion_original   TEXT NOT NULL,
+                event_uuid                   TEXT,
+                status                       TEXT NOT NULL,
+                response_json                TEXT,
+                created_at                   TEXT NOT NULL,
+                updated_at                   TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS contingencia (
+                idempotency_key  TEXT PRIMARY KEY,
+                event_uuid       TEXT,
+                status           TEXT NOT NULL,
+                response_json    TEXT,
+                created_at       TEXT NOT NULL,
+                updated_at       TEXT NOT NULL
+            )
+        """)
         conn.commit()
 
 
@@ -180,4 +201,113 @@ def save_idempotency(
                     response_json = excluded.response_json,
                     updated_at   = excluded.updated_at
             """, (key, status, payload_hash, response_json, now, now))
+            conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Anulaciones
+# ---------------------------------------------------------------------------
+
+def check_anulacion(key: str) -> dict | None:
+    """
+    Retorna la respuesta cacheada si la key existe con status='completed'.
+    Retorna None si no existe o si status='failed' (permite reintento).
+    Lanza ValueError si status='pending' (operación en vuelo).
+    """
+    with _LOCK:
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT status, response_json FROM anulaciones WHERE idempotency_key=?",
+                (key,)
+            ).fetchone()
+
+    if row is None:
+        return None
+    status, response_json = row
+    if status == "completed" and response_json:
+        return json.loads(response_json)
+    if status == "pending":
+        raise ValueError(
+            f"Anulación '{key}' tiene una operación en curso (status=pending). "
+            "Espere a que termine o reintente en unos segundos."
+        )
+    return None  # status='failed' → permitir reintento
+
+
+def save_anulacion(
+    key: str,
+    codigo_generacion_original: str,
+    event_uuid: str | None,
+    status: str,
+    response: dict | None = None,
+) -> None:
+    """Persiste o actualiza el estado de una operación de anulación."""
+    now = datetime.now(timezone.utc).isoformat()
+    response_json = json.dumps(response) if response is not None else None
+    with _LOCK:
+        with _get_conn() as conn:
+            conn.execute("""
+                INSERT INTO anulaciones
+                    (idempotency_key, codigo_generacion_original, event_uuid, status, response_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO UPDATE SET
+                    event_uuid    = excluded.event_uuid,
+                    status        = excluded.status,
+                    response_json = excluded.response_json,
+                    updated_at    = excluded.updated_at
+            """, (key, codigo_generacion_original, event_uuid, status, response_json, now, now))
+            conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Contingencia
+# ---------------------------------------------------------------------------
+
+def check_contingencia(key: str) -> dict | None:
+    """
+    Retorna la respuesta cacheada si la key existe con status='completed'.
+    Retorna None si no existe o si status='failed'.
+    Lanza ValueError si status='pending'.
+    """
+    with _LOCK:
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT status, response_json FROM contingencia WHERE idempotency_key=?",
+                (key,)
+            ).fetchone()
+
+    if row is None:
+        return None
+    status, response_json = row
+    if status == "completed" and response_json:
+        return json.loads(response_json)
+    if status == "pending":
+        raise ValueError(
+            f"Contingencia '{key}' tiene una operación en curso (status=pending). "
+            "Espere a que termine o reintente en unos segundos."
+        )
+    return None
+
+
+def save_contingencia(
+    key: str,
+    event_uuid: str | None,
+    status: str,
+    response: dict | None = None,
+) -> None:
+    """Persiste o actualiza el estado de un evento de contingencia."""
+    now = datetime.now(timezone.utc).isoformat()
+    response_json = json.dumps(response) if response is not None else None
+    with _LOCK:
+        with _get_conn() as conn:
+            conn.execute("""
+                INSERT INTO contingencia
+                    (idempotency_key, event_uuid, status, response_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO UPDATE SET
+                    event_uuid    = excluded.event_uuid,
+                    status        = excluded.status,
+                    response_json = excluded.response_json,
+                    updated_at    = excluded.updated_at
+            """, (key, event_uuid, status, response_json, now, now))
             conn.commit()

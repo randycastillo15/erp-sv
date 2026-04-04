@@ -4,9 +4,11 @@ Constantes de configuración del DTE Gateway.
 
 MH_ENDPOINT_TEST = "https://apitest.dtes.mh.gob.sv"
 MH_ENDPOINT_PROD = "https://api.dtes.mh.gob.sv"
-MH_AUTH_PATH     = "/seguridad/auth"
-MH_RECEIVE_PATH  = "/fesv/recepciondte"
-MH_QUERY_DTE_PATH = "/fesv/recepcion/consultadte/"
+MH_AUTH_PATH          = "/seguridad/auth"
+MH_RECEIVE_PATH       = "/fesv/recepciondte"
+MH_QUERY_DTE_PATH     = "/fesv/recepcion/consultadte/"
+MH_INVALIDATION_PATH  = "/fesv/anulardte"
+MH_CONTINGENCY_PATH   = "/fesv/contingencia"
 
 IVA_RATE = 0.13
 

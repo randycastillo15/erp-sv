@@ -1,4 +1,4 @@
-"""Tests para los mappers DTE: FE, CCF, NC y funciones comunes."""
+"""Tests para los mappers DTE: FE, CCF, NC, Anulación y Contingencia."""
 
 from datetime import date
 from decimal import Decimal
@@ -6,13 +6,18 @@ from decimal import Decimal
 import pytest
 
 from app.models.dte_request import (
+    AnulacionRequest,
+    ContingenciaDTEItem,
+    ContingenciaEmitRequest,
     DTEDireccionRequest,
     DTEEmitRequest,
     DTEEmisorSettings,
     DTEItemRequest,
     DTEReceptorRequest,
 )
+from app.services.mappers.anulacion_mapper import build_anulacion
 from app.services.mappers.common import amount_to_words, build_receptor_ccf_nc, round2, round8
+from app.services.mappers.contingencia_mapper import build_contingencia
 from app.services.mappers.fe_mapper import build_fe
 from app.services.mappers.ccf_mapper import build_ccf
 from app.services.mappers.nc_mapper import build_nc
@@ -473,3 +478,234 @@ def test_build_nc_iva_exclusivo(request_nc):
     item_dte = dte["cuerpoDocumento"][0]
     vg = Decimal(item_dte["ventaGravada"])
     assert abs(vg - Decimal("10.00000000")) < Decimal("0.00001")
+
+
+# ===========================================================================
+# Fixtures — Anulación y Contingencia
+# ===========================================================================
+
+UUID_ORIGINAL = "EFD95023-61B3-4C87-A343-FF95CB6FE080"
+UUID_REEMPLAZO = "AD8F4B7D-82F3-4D1B-BAE4-92CADC7123E2"
+SELLO_40 = "2026B8557E6E01EE42D89F3ED243C74B3242YTZL"
+NUMERO_CONTROL = "DTE-03-M0010001-000000000000001"
+
+
+@pytest.fixture
+def anulacion_base(emisor) -> AnulacionRequest:
+    """AnulacionRequest mínimo válido (tipoAnulacion=2, sin reemplazo)."""
+    return AnulacionRequest(
+        ambiente="00",
+        emisor=emisor,
+        tipo_dte="03",
+        codigo_generacion_original=UUID_ORIGINAL,
+        sello_recibido=SELLO_40,
+        numero_control=NUMERO_CONTROL,
+        fec_emi="2026-04-04",
+        monto_iva=13.00,
+        tipo_documento_receptor="36",
+        num_documento_receptor="040010231",
+        nombre_receptor="Ferreteria Gustavo",
+        tipo_anulacion=2,
+        motivo_anulacion="Prueba de anulación sin reemplazo",
+        nombre_responsable="Juan Rodriguez",
+        tip_doc_responsable="13",
+        num_doc_responsable="12345678-9",
+        nombre_solicita="Maria Lopez",
+        tip_doc_solicita="13",
+        num_doc_solicita="98765432-1",
+        fecha_anula="2026-04-04",
+        idempotency_key="test:anulacion:00001",
+    )
+
+
+@pytest.fixture
+def contingencia_base(emisor) -> ContingenciaEmitRequest:
+    """ContingenciaEmitRequest mínimo válido (tipoContingencia=2)."""
+    return ContingenciaEmitRequest(
+        ambiente="00",
+        emisor=emisor,
+        nombre_responsable="Juan Rodriguez",
+        tipo_doc_responsable="13",
+        num_doc_responsable="12345678-9",
+        tipo_contingencia=2,
+        motivo_contingencia=None,
+        f_inicio="2026-04-04",
+        h_inicio="08:00:00",
+        f_fin="2026-04-04",
+        h_fin="10:00:00",
+        detalle=[
+            ContingenciaDTEItem(no_item=1, codigo_generacion=UUID_ORIGINAL, tipo_doc="03"),
+            ContingenciaDTEItem(no_item=2, codigo_generacion=UUID_REEMPLAZO, tipo_doc="01"),
+        ],
+        idempotency_key="test:contingencia:00001",
+    )
+
+
+# ===========================================================================
+# Tests — Anulación mapper
+# ===========================================================================
+
+class TestAnulacionMapper:
+    def test_tipo2_codigo_reemplazo_es_null(self, anulacion_base):
+        """tipoAnulacion=2: codigoGeneracionR debe ser null en el JSON."""
+        result = build_anulacion(anulacion_base)
+        assert result["documento"]["codigoGeneracionR"] is None
+
+    def test_tipo2_con_reemplazo_lanza_error(self, anulacion_base):
+        """tipoAnulacion=2 no debe aceptar codigo_generacion_reemplazo."""
+        anulacion_base.tipo_anulacion = 2
+        anulacion_base.codigo_generacion_reemplazo = UUID_REEMPLAZO
+        with pytest.raises(ValueError, match="codigoGeneracionR debe ser null"):
+            build_anulacion(anulacion_base)
+
+    def test_tipo1_sin_reemplazo_lanza_error(self, anulacion_base):
+        """tipoAnulacion=1 requiere codigo_generacion_reemplazo."""
+        anulacion_base.tipo_anulacion = 1
+        anulacion_base.codigo_generacion_reemplazo = None
+        with pytest.raises(ValueError, match="requiere codigo_generacion_reemplazo"):
+            build_anulacion(anulacion_base)
+
+    def test_tipo3_con_reemplazo_valido(self, anulacion_base):
+        """tipoAnulacion=3 con reemplazo: codigoGeneracionR == UUID reemplazo."""
+        anulacion_base.tipo_anulacion = 3
+        anulacion_base.codigo_generacion_reemplazo = UUID_REEMPLAZO
+        result = build_anulacion(anulacion_base)
+        assert result["documento"]["codigoGeneracionR"] == UUID_REEMPLAZO.upper()
+
+    def test_tipo_invalido_lanza_error(self, anulacion_base):
+        """tipoAnulacion fuera de rango 1-3 lanza ValueError."""
+        anulacion_base.tipo_anulacion = 9
+        with pytest.raises(ValueError, match="inválido"):
+            build_anulacion(anulacion_base)
+
+    def test_emisor_sin_nrc_ni_codactividad(self, anulacion_base):
+        """Emisor de anulación NO incluye nrc ni codActividad (additionalProperties: false)."""
+        result = build_anulacion(anulacion_base)
+        emisor_json = result["emisor"]
+        assert "nrc" not in emisor_json
+        assert "codActividad" not in emisor_json
+        assert "descActividad" not in emisor_json
+        assert "nit" in emisor_json
+        assert "nombre" in emisor_json
+
+    def test_receptor_tipo_documento_cat22(self, anulacion_base):
+        """tipoDocumento del receptor respeta el valor pasado (CAT-22)."""
+        anulacion_base.tipo_documento_receptor = "36"
+        result = build_anulacion(anulacion_base)
+        assert result["documento"]["tipoDocumento"] == "36"
+
+    def test_identificacion_sin_numero_control(self, anulacion_base):
+        """Identificacion de anulación no tiene numeroControl."""
+        result = build_anulacion(anulacion_base)
+        assert "numeroControl" not in result["identificacion"]
+        assert "codigoGeneracion" in result["identificacion"]
+        assert "fecAnula" in result["identificacion"]
+        assert "horAnula" in result["identificacion"]
+
+    def test_event_uuid_interno_presente(self, anulacion_base):
+        """build_anulacion devuelve _event_uuid para que el router lo extraiga."""
+        result = build_anulacion(anulacion_base)
+        assert "_event_uuid" in result
+        assert len(result["_event_uuid"]) == 36   # UUID con guiones
+
+    def test_monto_iva_null_permitido(self, anulacion_base):
+        """montoIva puede ser None (schema type ["number","null"])."""
+        anulacion_base.monto_iva = None
+        result = build_anulacion(anulacion_base)
+        assert result["documento"]["montoIva"] is None
+
+    def test_version_es_2(self, anulacion_base):
+        """Versión del schema de anulación debe ser 2."""
+        result = build_anulacion(anulacion_base)
+        assert result["identificacion"]["version"] == 2
+
+
+# ===========================================================================
+# Tests — Contingencia mapper
+# ===========================================================================
+
+class TestContingenciaMapper:
+    def test_identificacion_usa_fTransmision(self, contingencia_base):
+        """identificacion usa fTransmision/hTransmision, NO fecEmi/horEmi."""
+        result = build_contingencia(contingencia_base)
+        ident = result["identificacion"]
+        assert "fTransmision" in ident
+        assert "hTransmision" in ident
+        assert "fecEmi" not in ident
+        assert "horEmi" not in ident
+
+    def test_sin_numero_control(self, contingencia_base):
+        """identificacion de contingencia NO tiene numeroControl."""
+        result = build_contingencia(contingencia_base)
+        assert "numeroControl" not in result["identificacion"]
+
+    def test_version_es_3(self, contingencia_base):
+        """Versión del schema de contingencia debe ser 3."""
+        result = build_contingencia(contingencia_base)
+        assert result["identificacion"]["version"] == 3
+
+    def test_emisor_incluye_responsable(self, contingencia_base):
+        """Emisor de contingencia incluye nombreResponsable/tipoDocResponsable/numeroDocResponsable."""
+        result = build_contingencia(contingencia_base)
+        emisor = result["emisor"]
+        assert emisor["nombreResponsable"] == "Juan Rodriguez"
+        assert emisor["tipoDocResponsable"] == "13"
+        assert emisor["numeroDocResponsable"] == "12345678-9"
+
+    def test_emisor_sin_nrc_ni_codactividad(self, contingencia_base):
+        """Emisor de contingencia NO incluye nrc/codActividad (additionalProperties: false)."""
+        result = build_contingencia(contingencia_base)
+        emisor = result["emisor"]
+        assert "nrc" not in emisor
+        assert "codActividad" not in emisor
+
+    def test_detalle_items(self, contingencia_base):
+        """detalleDTE tiene noItem, codigoGeneracion, tipoDoc — sin campos extras."""
+        result = build_contingencia(contingencia_base)
+        item = result["detalleDTE"][0]
+        assert set(item.keys()) == {"noItem", "codigoGeneracion", "tipoDoc"}
+        assert item["codigoGeneracion"] == UUID_ORIGINAL.upper()
+
+    def test_detalle_vacio_lanza_error(self, contingencia_base):
+        """detalle vacío debe lanzar ValueError."""
+        contingencia_base.detalle = []
+        with pytest.raises(ValueError, match="minItems"):
+            build_contingencia(contingencia_base)
+
+    def test_detalle_supera_1000_lanza_error(self, contingencia_base, emisor):
+        """detalle con más de 1000 items lanza ValueError."""
+        contingencia_base.detalle = [
+            ContingenciaDTEItem(no_item=i, codigo_generacion=UUID_ORIGINAL, tipo_doc="01")
+            for i in range(1, 1002)
+        ]
+        with pytest.raises(ValueError, match="1000"):
+            build_contingencia(contingencia_base)
+
+    def test_tipo5_sin_motivo_lanza_error(self, contingencia_base):
+        """tipoContingencia=5 requiere motivoContingencia no vacío."""
+        contingencia_base.tipo_contingencia = 5
+        contingencia_base.motivo_contingencia = None
+        with pytest.raises(ValueError, match="motivoContingencia"):
+            build_contingencia(contingencia_base)
+
+    def test_tipo5_con_motivo_valido(self, contingencia_base):
+        """tipoContingencia=5 con motivo: construye correctamente."""
+        contingencia_base.tipo_contingencia = 5
+        contingencia_base.motivo_contingencia = "Corte de energía en datacenter"
+        result = build_contingencia(contingencia_base)
+        assert result["motivo"]["motivoContingencia"] == "Corte de energía en datacenter"
+
+    def test_event_uuid_interno_presente(self, contingencia_base):
+        """build_contingencia devuelve _event_uuid para extracción por el router."""
+        result = build_contingencia(contingencia_base)
+        assert "_event_uuid" in result
+        assert len(result["_event_uuid"]) == 36
+
+    def test_motivo_periodo(self, contingencia_base):
+        """motivo contiene fInicio/hInicio/fFin/hFin del request."""
+        result = build_contingencia(contingencia_base)
+        motivo = result["motivo"]
+        assert motivo["fInicio"] == "2026-04-04"
+        assert motivo["hInicio"] == "08:00:00"
+        assert motivo["fFin"] == "2026-04-04"
+        assert motivo["hFin"] == "10:00:00"

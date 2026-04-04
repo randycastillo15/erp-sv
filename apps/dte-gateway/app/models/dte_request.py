@@ -114,3 +114,76 @@ class DTEStatusRequest(BaseModel):
     ambiente: str = "00"
     nit_emisor: str                   # el gateway lo usa como clave de cache de token
     # api_password NO se incluye — el gateway lo resuelve via secret_resolver
+
+
+class AnulacionRequest(BaseModel):
+    """
+    Payload para anular un DTE ya PROCESADO por MH (schema anulacion-v2.json).
+
+    `sello_recibido` y `numero_control` se leen de sv_sello_recepcion y
+    sv_dte_control_number del Sales Invoice original.
+
+    `monto_iva` → fuente principal: sv_total_iva (persistido en emit_dte).
+    Si vacío (documento legacy pre-Sprint 4), fallback a total_taxes_and_charges
+    con log de advertencia. Si ambos vacíos: None (schema lo permite).
+    """
+    ambiente: str = "00"
+    emisor: DTEEmisorSettings
+    # DTE a anular
+    tipo_dte: str                            # "01", "03", "05", etc.
+    codigo_generacion_original: str          # UUID — sv_dte_generation_code
+    sello_recibido: str                      # 40 chars A-Z0-9 — sv_sello_recepcion
+    numero_control: str                      # sv_dte_control_number
+    fec_emi: str                             # YYYY-MM-DD del DTE original
+    monto_iva: Optional[float] = None        # null permitido por schema
+    # Receptor del DTE original
+    tipo_documento_receptor: str             # CAT-022: "36"=NIT, "13"=DUI
+    num_documento_receptor: str
+    nombre_receptor: str
+    # Motivo de anulación
+    tipo_anulacion: int                      # 1=Error/reemplazar, 2=Sin reemplazo, 3=Devolución
+    motivo_anulacion: str
+    codigo_generacion_reemplazo: Optional[str] = None   # UUID solo si tipo 1 o 3
+    # Responsable técnico que ejecuta la anulación
+    nombre_responsable: str
+    tip_doc_responsable: str
+    num_doc_responsable: str
+    # Solicitante (quien pide la anulación)
+    nombre_solicita: str
+    tip_doc_solicita: str
+    num_doc_solicita: str
+    fecha_anula: str                         # YYYY-MM-DD
+    idempotency_key: str
+
+
+class ContingenciaDTEItem(BaseModel):
+    """Un DTE emitido offline incluido en el evento de contingencia."""
+    no_item: int
+    codigo_generacion: str   # UUID del DTE offline
+    tipo_doc: str            # "01", "03", "05", etc.
+
+
+class ContingenciaEmitRequest(BaseModel):
+    """
+    Payload para transmitir un evento de contingencia tipo 14 (schema contingencia-v3.json).
+
+    El evento agrupa hasta 1000 DTEs emitidos offline durante un período sin MH disponible.
+    Tiene su propio codigoGeneracion (UUID nuevo, distinto a los DTEs listados).
+    No tiene numeroControl — identificacion usa fTransmision/hTransmision.
+    """
+    ambiente: str = "00"
+    emisor: DTEEmisorSettings
+    # Responsable técnico — 3 campos extra del emisor de contingencia (no presentes en emisor regular)
+    nombre_responsable: str
+    tipo_doc_responsable: str
+    num_doc_responsable: str
+    # Período de contingencia
+    tipo_contingencia: int              # 1-5
+    motivo_contingencia: Optional[str] = None   # requerido si tipo=5
+    f_inicio: str                       # YYYY-MM-DD
+    h_inicio: str              # HH:MM:SS
+    f_fin: str                 # YYYY-MM-DD
+    h_fin: str                 # HH:MM:SS
+    # DTEs offline a reportar (1-1000)
+    detalle: list[ContingenciaDTEItem]
+    idempotency_key: str

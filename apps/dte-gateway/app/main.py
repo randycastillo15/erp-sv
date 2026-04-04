@@ -4,15 +4,19 @@ from datetime import datetime, timezone
 from fastapi import Body, FastAPI
 
 from app.routers.dte import router as dte_router
+from app.routers.anulacion import router as anulacion_router
+from app.routers.contingencia import router as contingencia_router
 
 app = FastAPI(
     title="DTE Gateway SV",
-    version="0.2.0",
-    description="Gateway DTE El Salvador — Sprint 2"
+    version="0.4.0",
+    description="Gateway DTE El Salvador — Sprint 4"
 )
 
-# Router v2 — endpoints tipados con integración real MH
+# Routers v2 — FE/CCF/NC + Anulación + Contingencia
 app.include_router(dte_router)
+app.include_router(anulacion_router)
+app.include_router(contingencia_router)
 
 
 @app.get("/")
