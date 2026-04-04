@@ -1,42 +1,79 @@
 """
-STUB — Signer Client para svfe-api-firmador.
+Signer Client — firma un DTE JSON usando el svfe-api-firmador (Spring Boot :8113).
 
-Sprint 2: implementar llamada HTTP al firmador oficial (Spring Boot, :8113).
+La password_pri se resuelve internamente via secret_resolver — nunca se recibe
+como parámetro externo.
 
-Firmador — endpoint de firma:
-  POST http://localhost:8113/firma/firmardocumento/
+Firmador endpoint:
+  POST <url_firmador>
   Content-Type: application/json
-  Body: {
-    "nit": "<NIT_14DIGITS>",
-    "passwordPri": "<CLAVE_PRIVADA>",
-    "activo": true,
-    "dteJson": <objeto JSON del DTE sin firmar>
-  }
+  Body: {"nit": str, "passwordPri": str, "activo": true, "dteJson": dict}
   Response OK:  {"status": "OK",    "body": "<JWS_compact_serialization>"}
   Response Err: {"status": "ERROR", "body": {"codigo": "...", "mensaje": [...]}}
-
-El JWS compact serialization resultante se coloca en el campo
-"firmaElectronica" del DTE antes de enviarlo al MH.
 """
 
+import logging
 
-def sign_dte(dte_json: dict, nit: str, password_pri: str) -> str:
+import requests
+
+from app.config import FIRMADOR_TIMEOUT
+from app.services.secret_resolver import get_firmador_password
+
+logger = logging.getLogger(__name__)
+
+
+def sign_dte(dte_json: dict, nit: str, url_firmador: str, firmador_nit: str | None = None) -> str:
     """
-    Firma un DTE JSON y retorna el JWS compact serialization.
+    Firma el DTE JSON y retorna el JWS compact serialization.
 
     Args:
         dte_json:     Objeto JSON del DTE sin firmar.
-        nit:          NIT del emisor (14 dígitos).
-        password_pri: Contraseña de la clave privada del certificado.
+        nit:          NIT/DUI del emisor en el DTE (puede ser 9 dígitos DUI o 14 dígitos NIT).
+        url_firmador: URL del endpoint del firmador.
+        firmador_nit: NIT de 14 dígitos para lookup del certificado. Si None, usa nit.
+                      Necesario cuando el DTE usa DUI (9 dígitos) pero el cert está registrado
+                      con el NIT completo (14 dígitos) en el firmador.
 
     Returns:
-        JWS compact serialization — va como "firmaElectronica" en el DTE final.
+        JWS compact serialization.
 
     Raises:
-        NotImplementedError: hasta Sprint 2.
+        RuntimeError: si el firmador responde con ERROR o no está disponible.
+        RuntimeError: si FIRMADOR_PASSWORD_PRI no está configurada.
     """
-    raise NotImplementedError(
-        "signer_client.sign_dte — pendiente Sprint 2.\n"
-        "Firmador: POST http://localhost:8113/firma/firmardocumento/.\n"
-        "El resultado (body) se agrega como firmaElectronica al DTE antes de enviarlo al MH."
-    )
+    password_pri = get_firmador_password()
+    cert_nit = firmador_nit or nit
+
+    payload = {
+        "nit": cert_nit,
+        "passwordPri": password_pri,
+        "activo": True,
+        "dteJson": dte_json,
+    }
+
+    logger.info("signer_client: firmando DTE nit=%s cert_nit=%s url=%s", nit, cert_nit, url_firmador)
+    try:
+        response = requests.post(
+            url_firmador,
+            json=payload,
+            timeout=FIRMADOR_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError as exc:
+        raise RuntimeError(f"No se pudo conectar al firmador en {url_firmador}: {exc}") from exc
+    except requests.exceptions.Timeout:
+        raise RuntimeError(
+            f"Timeout al contactar firmador ({FIRMADOR_TIMEOUT}s): {url_firmador}"
+        )
+
+    body = response.json()
+    if body.get("status") != "OK":
+        error_detail = body.get("body", body)
+        raise RuntimeError(f"Firmador respondió con ERROR: {error_detail}")
+
+    jws: str = body["body"]
+    if not jws or not isinstance(jws, str):
+        raise RuntimeError(f"Firmador retornó body inesperado: {body!r}")
+
+    logger.info("signer_client: firma exitosa nit=%s cert_nit=%s", nit, cert_nit)
+    return jws

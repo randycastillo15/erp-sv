@@ -1,0 +1,140 @@
+"""
+MH Client — transmite DTEs al Ministerio de Hacienda y consulta su estado.
+
+Retry: 3 intentos, timeout 8s cada uno, 1s de espera entre reintentos.
+El token se obtiene externamente (desde auth_client) y se pasa como argumento.
+"""
+
+import logging
+import time
+
+import requests
+
+from app.config import (
+    MH_ENDPOINT_PROD,
+    MH_ENDPOINT_TEST,
+    MH_QUERY_DTE_PATH,
+    MH_RECEIVE_PATH,
+    MH_SEND_RETRIES,
+    MH_SEND_RETRY_SLEEP,
+    MH_SEND_TIMEOUT,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _base_url(ambiente: str) -> str:
+    return MH_ENDPOINT_TEST if ambiente == "00" else MH_ENDPOINT_PROD
+
+
+def send_dte(
+    jws: str,
+    codigo_generacion: str,
+    tipo_dte: str,
+    version: int,
+    ambiente: str,
+    token: str,
+    id_envio: int = 1,
+) -> dict:
+    """
+    Envía un DTE firmado al MH usando el formato de recepción uno a uno.
+
+    Body: {ambiente, idEnvio, version, tipoDte, documento (JWS), codigoGeneracion}
+    Retry: MH_SEND_RETRIES intentos con timeout MH_SEND_TIMEOUT cada uno.
+    En caso de error HTTP 5xx o timeout, reintenta. Error 4xx no se reintenta.
+
+    Args:
+        jws:               JWS compact serialization del firmador.
+        codigo_generacion: UUID v4 uppercase del DTE.
+        tipo_dte:          "01", "03", "05", etc.
+        version:           Versión del schema (1 para FE, 3 para CCF/NC).
+        ambiente:          "00"=pruebas, "01"=producción.
+        token:             Bearer token (sin prefijo "Bearer ").
+        id_envio:          Correlativo de envío (entero, a discreción).
+
+    Returns:
+        Dict con la respuesta del MH (estado, selloRecibido, fhProcesamiento, etc.).
+
+    Raises:
+        RuntimeError: si todos los reintentos fallan.
+    """
+    url = f"{_base_url(ambiente)}{MH_RECEIVE_PATH}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": "dte-gateway/2.0",
+    }
+    body = {
+        "ambiente":         ambiente,
+        "idEnvio":          id_envio,
+        "version":          version,
+        "tipoDte":          tipo_dte,
+        "documento":        jws,
+        "codigoGeneracion": codigo_generacion,
+    }
+
+    last_exc: Exception | None = None
+    for attempt in range(1, MH_SEND_RETRIES + 1):
+        try:
+            logger.info(
+                "mh_client: enviando DTE al MH tipo=%s ambiente=%s gen=%s intento=%d/%d",
+                tipo_dte, ambiente, codigo_generacion, attempt, MH_SEND_RETRIES,
+            )
+            response = requests.post(
+                url,
+                json=body,
+                headers=headers,
+                timeout=MH_SEND_TIMEOUT,
+            )
+            # No reintentar en errores 4xx (problema en el DTE, no en el servidor)
+            if 400 <= response.status_code < 500:
+                response.raise_for_status()
+
+            response.raise_for_status()
+            result = response.json()
+            logger.info(
+                "mh_client: respuesta MH estado=%s sello=%s",
+                result.get("estado"), result.get("selloRecibido"),
+            )
+            return result
+
+        except requests.exceptions.Timeout as exc:
+            last_exc = exc
+            logger.warning("mh_client: timeout intento %d/%d", attempt, MH_SEND_RETRIES)
+        except requests.exceptions.HTTPError as exc:
+            # 4xx → no reintentar
+            if exc.response is not None and 400 <= exc.response.status_code < 500:
+                raise RuntimeError(f"MH rechazó el DTE (HTTP {exc.response.status_code}): {exc.response.text}") from exc
+            last_exc = exc
+            logger.warning("mh_client: HTTP error intento %d/%d: %s", attempt, MH_SEND_RETRIES, exc)
+        except requests.exceptions.ConnectionError as exc:
+            last_exc = exc
+            logger.warning("mh_client: connection error intento %d/%d: %s", attempt, MH_SEND_RETRIES, exc)
+
+        if attempt < MH_SEND_RETRIES:
+            time.sleep(MH_SEND_RETRY_SLEEP)
+
+    raise RuntimeError(
+        f"MH no respondió después de {MH_SEND_RETRIES} intentos: {last_exc}"
+    )
+
+
+def query_dte_status(codigo_generacion: str, ambiente: str, token: str) -> dict:
+    """
+    Consulta el estado de un DTE en el MH por su código de generación.
+
+    Args:
+        codigo_generacion: UUID v4 uppercase del DTE.
+        ambiente:          "00"=pruebas, "01"=producción.
+        token:             Bearer token (sin prefijo "Bearer ").
+
+    Returns:
+        Dict con la respuesta del MH.
+    """
+    url = f"{_base_url(ambiente)}{MH_QUERY_DTE_PATH}{codigo_generacion}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    logger.info("mh_client: consultando estado DTE codigo=%s", codigo_generacion)
+    response = requests.get(url, headers=headers, timeout=MH_SEND_TIMEOUT)
+    response.raise_for_status()
+    return response.json()

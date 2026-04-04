@@ -1,14 +1,12 @@
 """
-Router DTE v2 — endpoints con modelos Pydantic tipados.
-
-Montado opcionalmente en main.py (Sprint 1: solo estructura, no reemplaza mock).
-Los endpoints reales (firma + transmisión MH) se activarán en Sprint 2.
+Router DTE v2 — endpoints tipados con integración real MH.
 """
 from fastapi import APIRouter, HTTPException
 
 from app.models.dte_request import DTEEmitRequest, DTEStatusRequest
 from app.models.dte_response import DTEEmitResponse
-from app.services.control_number import generate_codigo_generacion, generate_numero_control
+from app.services import auth_client, mh_client
+from app.services import dte_service
 
 router = APIRouter(prefix="/v2/dte", tags=["DTE"])
 
@@ -16,37 +14,27 @@ router = APIRouter(prefix="/v2/dte", tags=["DTE"])
 @router.post("/emit", response_model=DTEEmitResponse)
 def emit_dte_v2(request: DTEEmitRequest) -> DTEEmitResponse:
     """
-    Emite un DTE (Sprint 1: mock tipado — valida contrato ERP→Gateway).
+    Emite un DTE: valida schema, firma, transmite al MH y retorna resultado.
 
-    Sprint 2: reemplazar por flujo completo: build → sign → transmit → respond.
+    Idempotente: misma idempotency_key retorna resultado cacheado sin reenviar.
     """
-    gen_code = generate_codigo_generacion()
-    control_num = generate_numero_control(
-        tipo_dte=request.tipo_dte,
-        cod_estable_mh="0001",          # TODO Sprint 2: leer de settings
-        cod_punto_venta_mh="0001",
-        secuencial=1,                   # TODO Sprint 2: secuencial persistente
-    )
-
-    return DTEEmitResponse(
-        status="received",
-        mode="mock_v2",
-        generation_code=gen_code,
-        uuid_dte=gen_code,              # compat legacy
-        control_number=control_num,
-        estado="MOCK",
-    )
+    try:
+        return dte_service.emit(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/status")
 def get_dte_status(request: DTEStatusRequest) -> dict:
     """
-    Consulta el estado de un DTE — stub hasta Sprint 2.
+    Consulta el estado de un DTE en el MH por código de generación.
     """
-    return {
-        "status": "stub",
-        "codigo_generacion": request.codigo_generacion,
-        "tipo_dte": request.tipo_dte,
-        "ambiente": request.ambiente,
-        "message": "Consulta de estado pendiente Sprint 2",
-    }
+    try:
+        token = auth_client.get_token(request.nit_emisor, request.ambiente)
+        return mh_client.query_dte_status(request.codigo_generacion, request.ambiente, token)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

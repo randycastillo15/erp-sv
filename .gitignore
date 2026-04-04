@@ -37,6 +37,7 @@ node_modules/
 dist/
 build/
 infra/erpnext/
+apps/dte-gateway/app/data/
 
 # Documentation
 dte-knowledge/

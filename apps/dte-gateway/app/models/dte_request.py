@@ -1,6 +1,9 @@
 """
-Contrato de entrada del gateway DTE — versión 1.
+Contrato de entrada del gateway DTE — versión 2.
 Define qué envía ERPNext al gateway por cada tipo de operación.
+
+IMPORTANTE: DTEEmisorSettings NO incluye secretos (password_pri, api_password).
+El gateway los resuelve internamente via secret_resolver.py.
 """
 from datetime import date
 from decimal import Decimal
@@ -21,7 +24,7 @@ class DTEItemRequest(BaseModel):
     venta_no_sujeta: Decimal = Decimal("0")
     venta_exenta: Decimal = Decimal("0")
     venta_gravada: Decimal = Decimal("0")
-    tributos: list[str] = Field(default_factory=list)   # ej: ["20"] = IVA
+    tributos: Optional[list[str]] = Field(default_factory=list)   # códigos de tributos especiales (no IVA en FE)
     codigo_interno: Optional[str] = None
 
 
@@ -38,6 +41,33 @@ class DTEReceptorRequest(BaseModel):
     direccion_municipio: Optional[str] = None        # CAT-013
     direccion_complemento: Optional[str] = None
     cod_actividad: Optional[str] = None              # CAT-019 (requerido para CCF)
+
+
+class DTEEmisorSettings(BaseModel):
+    """
+    Datos del emisor enviados desde ERPNext.
+
+    SIN credenciales: password_pri y api_password NO se incluyen aquí.
+    El gateway los resuelve internamente desde variables de entorno.
+    """
+    nit: str                          # 14 dígitos sin guiones
+    nrc: str
+    nombre: str
+    nombre_comercial: Optional[str] = None
+    cod_actividad: str
+    desc_actividad: str
+    tipo_establecimiento: str         # CAT-017
+    cod_estable_mh: str               # 4 chars — asignado por MH (ej. "M001")
+    cod_estable: Optional[str] = None
+    cod_punto_venta_mh: str           # 4 chars — asignado por MH (ej. "P001")
+    cod_punto_venta: Optional[str] = None
+    departamento: str                 # CAT-012
+    municipio: str
+    complemento: str
+    telefono: Optional[str] = None
+    correo: Optional[str] = None
+    url_firmador: str                 # URL del firmador (no es secreto)
+    nit_firmador: Optional[str] = None  # NIT 14 dígitos para lookup de cert; si None usa nit
 
 
 class DTEEmitRequest(BaseModel):
@@ -64,6 +94,10 @@ class DTEEmitRequest(BaseModel):
     documento_relacionado_codigo: Optional[str] = None
     documento_relacionado_tipo: Optional[str] = None
     documento_relacionado_fecha: Optional[date] = None
+    # Sprint 2: emisor + idempotencia
+    emisor: DTEEmisorSettings
+    idempotency_key: str                  # "{site}:{doctype}:{docname}:{tipo_dte}:{ambiente}"
+    skip_schema_validation: bool = False  # escape hatch diagnóstico — no usar en producción
 
 
 class DTEStatusRequest(BaseModel):
@@ -71,3 +105,5 @@ class DTEStatusRequest(BaseModel):
     tipo_dte: str
     codigo_generacion: str
     ambiente: str = "00"
+    nit_emisor: str                   # el gateway lo usa como clave de cache de token
+    # api_password NO se incluye — el gateway lo resuelve via secret_resolver

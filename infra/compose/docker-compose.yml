@@ -7,8 +7,12 @@ services:
     ports:
       - "8100:8000"
     env_file:
-      - ../../.env.example
+      - ../../apps/dte-gateway/.env
     volumes:
       - ../../apps/dte-gateway/app:/app/app
       - ../../apps/dte-gateway/tests:/app/tests
+      - dte_data:/app/data
     restart: unless-stopped
+
+volumes:
+  dte_data:
