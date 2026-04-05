@@ -281,22 +281,43 @@ def send_contingencia(
     )
 
 
-def query_dte_status(codigo_generacion: str, ambiente: str, token: str) -> dict:
+def query_dte_status(
+    codigo_generacion: str,
+    ambiente: str,
+    token: str,
+    nit_emisor: str,
+    tipo_dte: str,
+) -> dict:
     """
     Consulta el estado de un DTE en el MH por su código de generación.
+
+    MH requiere POST con cuerpo JSON {nitEmisor, tdte, codigoGeneracion}.
 
     Args:
         codigo_generacion: UUID v4 uppercase del DTE.
         ambiente:          "00"=pruebas, "01"=producción.
         token:             Bearer token (sin prefijo "Bearer ").
+        nit_emisor:        NIT del emisor (sin guiones).
+        tipo_dte:          Código tipo DTE ("01", "03", "05", etc.).
 
     Returns:
-        Dict con la respuesta del MH.
+        Dict con la respuesta del MH (incluye campo "estado").
     """
-    url = f"{_base_url(ambiente)}{MH_QUERY_DTE_PATH}{codigo_generacion}"
-    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{_base_url(ambiente)}{MH_QUERY_DTE_PATH}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "nitEmisor":        nit_emisor,
+        "tdte":             tipo_dte,
+        "codigoGeneracion": codigo_generacion,
+    }
 
-    logger.info("mh_client: consultando estado DTE codigo=%s", codigo_generacion)
-    response = requests.get(url, headers=headers, timeout=MH_SEND_TIMEOUT)
+    logger.info(
+        "mh_client: consultando estado DTE codigo=%s tipo=%s",
+        codigo_generacion, tipo_dte,
+    )
+    response = requests.post(url, json=body, headers=headers, timeout=MH_SEND_TIMEOUT)
     response.raise_for_status()
     return response.json()

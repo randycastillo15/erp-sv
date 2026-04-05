@@ -35,6 +35,12 @@ def get_dte_status(request: DTEStatusRequest) -> dict:
     """
     try:
         token = auth_client.get_token(request.nit_emisor, request.ambiente)
-        return mh_client.query_dte_status(request.codigo_generacion, request.ambiente, token)
+        return mh_client.query_dte_status(
+            codigo_generacion=request.codigo_generacion,
+            ambiente=request.ambiente,
+            token=token,
+            nit_emisor=request.nit_emisor,
+            tipo_dte=request.tipo_dte,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
