@@ -149,6 +149,7 @@ def build_nd(request: DTEEmitRequest, numero_control: str, codigo_generacion: st
         "montoTotalOperacion": round2(monto_total),
         "totalLetras":         amount_to_words(monto_total.quantize(Decimal("0.01"))),
         "condicionOperacion":  request.condicion_operacion,
+        "numPagoElectronico":  None,   # requerido por fe-nd-v3.json; null válido (type: [string, null])
     }
 
     return {

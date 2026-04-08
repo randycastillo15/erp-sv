@@ -27,7 +27,7 @@ PAYLOAD=$(cat <<EOF
     "desc_actividad": "Comercio",
     "direccion": {
       "departamento": "06",
-      "municipio": "23",
+      "municipio": "01",
       "complemento": "Av. Reforma"
     },
     "telefono": "22224444",

@@ -33,7 +33,7 @@ PAYLOAD=$(cat <<EOF
     "desc_actividad": "Comercio",
     "direccion": {
       "departamento": "06",
-      "municipio": "23",
+      "municipio": "01",
       "complemento": "Av. Reforma"
     },
     "telefono": "22224444",
@@ -68,6 +68,8 @@ PAYLOAD=$(cat <<EOF
     "departamento": "05",
     "municipio": "25",
     "complemento": "Calle Prueba #1",
+    "telefono": "22223333",
+    "correo": "prueba@empresa.com",
     "url_firmador": "$URL_FIRMADOR",
     "nit_firmador": "$NIT_FIRMADOR"
   },

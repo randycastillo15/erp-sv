@@ -1,4 +1,4 @@
-"""Tests para los mappers DTE: FE, CCF, NC, Anulación y Contingencia."""
+"""Tests para los mappers DTE: FE, CCF, NC, ND, Anulación y Contingencia."""
 
 from datetime import date
 from decimal import Decimal
@@ -21,6 +21,7 @@ from app.services.mappers.contingencia_mapper import build_contingencia
 from app.services.mappers.fe_mapper import build_fe
 from app.services.mappers.ccf_mapper import build_ccf
 from app.services.mappers.nc_mapper import build_nc
+from app.services.mappers.nd_mapper import build_nd
 
 
 # ---------------------------------------------------------------------------
@@ -709,3 +710,95 @@ class TestContingenciaMapper:
         assert motivo["hInicio"] == "08:00:00"
         assert motivo["fFin"] == "2026-04-04"
         assert motivo["hFin"] == "10:00:00"
+
+
+# ---------------------------------------------------------------------------
+# build_nd (tipo 06 — Nota de Débito)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def request_nd(emisor, item_simple, receptor_ccf) -> DTEEmitRequest:
+    """ND contra CCF (tipoDocumento="03") con receptor completo."""
+    return DTEEmitRequest(
+        tipo_dte="06",
+        ambiente="00",
+        docname="SINV-TEST-ND-001",
+        company="Mi Empresa SV",
+        posting_date=date(2026, 4, 1),
+        receptor=receptor_ccf,
+        items=[item_simple],
+        grand_total=Decimal("11.30"),
+        total_iva=Decimal("1.30"),
+        emisor=emisor,
+        idempotency_key="test:Sales Invoice:SINV-TEST-ND-001:06:00",
+        documento_relacionado_codigo="A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+        documento_relacionado_tipo="03",
+        documento_relacionado_fecha=date(2026, 3, 31),
+    )
+
+
+def test_build_nd_tipo_dte_es_06(request_nd):
+    """tipoDte del DTE construido debe ser '06'."""
+    dte = build_nd(request_nd, "DTE-06-00010001-000000000000001", "AAAA")
+    assert dte["identificacion"]["tipoDte"] == "06"
+
+
+def test_build_nd_sin_doc_relacionado_lanza_error(emisor, item_simple, receptor_ccf):
+    """ValueError si documento_relacionado_codigo es None."""
+    req = DTEEmitRequest(
+        tipo_dte="06",
+        ambiente="00",
+        docname="SINV-TEST-ND-ERR",
+        company="Mi Empresa SV",
+        posting_date=date(2026, 4, 1),
+        receptor=receptor_ccf,
+        items=[item_simple],
+        grand_total=Decimal("11.30"),
+        total_iva=Decimal("1.30"),
+        emisor=emisor,
+        idempotency_key="test:err",
+        documento_relacionado_codigo=None,
+    )
+    with pytest.raises(ValueError, match="documento_relacionado_codigo"):
+        build_nd(req, "DTE-06-00010001-000000000000001", "BBBB")
+
+
+def test_build_nd_tipo_relacionado_invalido_lanza_error(emisor, item_simple, receptor_ccf):
+    """ValueError si tipoDocumento relacionado no es '03' ni '07'."""
+    req = DTEEmitRequest(
+        tipo_dte="06",
+        ambiente="00",
+        docname="SINV-TEST-ND-ERR2",
+        company="Mi Empresa SV",
+        posting_date=date(2026, 4, 1),
+        receptor=receptor_ccf,
+        items=[item_simple],
+        grand_total=Decimal("11.30"),
+        total_iva=Decimal("1.30"),
+        emisor=emisor,
+        idempotency_key="test:err2",
+        documento_relacionado_codigo="A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+        documento_relacionado_tipo="01",  # FE no es válido para ND
+    )
+    with pytest.raises(ValueError, match="tipoDocumento"):
+        build_nd(req, "DTE-06-00010001-000000000000001", "CCCC")
+
+
+def test_build_nd_resumen_incluye_num_pago_electronico(request_nd):
+    """resumen debe incluir numPagoElectronico (requerido por fe-nd-v3.json)."""
+    dte = build_nd(request_nd, "DTE-06-00010001-000000000000001", "DDDD")
+    assert "numPagoElectronico" in dte["resumen"]
+
+
+def test_build_nd_montos_positivos(request_nd):
+    """ND: montos en cuerpoDocumento deben ser positivos (exclusiveMinimum: 0)."""
+    dte = build_nd(request_nd, "DTE-06-00010001-000000000000001", "EEEE")
+    for item in dte["cuerpoDocumento"]:
+        assert item["ventaGravada"] >= 0
+        assert item["cantidad"] > 0
+
+
+def test_build_nd_control_number_prefijo(request_nd):
+    """numeroControl debe empezar con DTE-06-."""
+    dte = build_nd(request_nd, "DTE-06-00010001-000000000000001", "FFFF")
+    assert dte["identificacion"]["numeroControl"].startswith("DTE-06-")
