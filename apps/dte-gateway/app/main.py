@@ -9,8 +9,8 @@ from app.routers.contingencia import router as contingencia_router
 
 app = FastAPI(
     title="DTE Gateway SV",
-    version="0.5.0",
-    description="Gateway DTE El Salvador — Sprint 5"
+    version="0.6.0",
+    description="Gateway DTE El Salvador — Sprint 6"
 )
 
 # Routers v2 — FE/CCF/NC + Anulación + Contingencia

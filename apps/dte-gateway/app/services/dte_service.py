@@ -25,6 +25,7 @@ from app.services.dte_store import check_idempotency, next_secuencial, save_idem
 from app.services.mappers.ccf_mapper import build_ccf
 from app.services.mappers.fe_mapper import build_fe
 from app.services.mappers.nc_mapper import build_nc
+from app.services.mappers.nd_mapper import build_nd
 from app.services.schema_validator import validate_dte
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ _MAPPERS = {
     "01": build_fe,
     "03": build_ccf,
     "05": build_nc,
+    "06": build_nd,   # Nota de Débito (tipoDte="06" confirmado en fe-nd-v3.json)
 }
 
 

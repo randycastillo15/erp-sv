@@ -62,6 +62,12 @@ else
     skip_smoke "smoke_nc" "requiere CCF_GEN_CODE y CCF_NUM_CONTROL"
 fi
 
+if [[ -n "${CCF_GEN_CODE:-}" ]]; then
+    run_smoke "smoke_nd"
+else
+    skip_smoke "smoke_nd" "requiere CCF_GEN_CODE"
+fi
+
 if [[ -n "${GEN_CODE:-}" && -n "${TIPO_DTE:-}" ]]; then
     run_smoke "smoke_status"
 else

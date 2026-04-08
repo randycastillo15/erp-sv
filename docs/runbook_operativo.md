@@ -1,7 +1,7 @@
 # Runbook Operativo — DTE El Salvador
 
 > Sistema de facturación electrónica El Salvador integrado con ERPNext y el DTE Gateway.
-> Revisado: Sprint 5 — Abril 2026.
+> Revisado: Sprint 6 — Abril 2026.
 
 ---
 
@@ -58,7 +58,7 @@ docker exec -w /workspace/development/frappe-bench erpnext_devcontainer-frappe-1
 
 ### Pasos:
 1. Abrir Sales Invoice **enviada** (docstatus = 1).
-2. Seleccionar `sv_dte_document_type` (FE, CCF o NC) — campo obligatorio.
+2. Seleccionar `sv_dte_document_type` (FE, CCF, NC o ND) — campo obligatorio.
 3. Para CCF/NC: el Customer debe tener `sv_nit` configurado.
 4. Hacer clic en **DTE El Salvador → Emitir DTE**.
 5. Esperar freeze (hasta 30s — incluye firma + MH).
@@ -93,7 +93,7 @@ docker exec -w /workspace/development/frappe-bench erpnext_devcontainer-frappe-1
 
 ---
 
-## 6. Anular DTE (Invalidación)
+## 6. Invalidar DTE
 
 ### Requisitos:
 - `sv_estado_mh` = **PROCESADO**
@@ -102,9 +102,9 @@ docker exec -w /workspace/development/frappe-bench erpnext_devcontainer-frappe-1
 
 ### Desde UI:
 1. Abrir Sales Invoice PROCESADA.
-2. **DTE El Salvador → Anular DTE** (botón rojo).
+2. **DTE El Salvador → Invalidar DTE** (botón rojo).
 3. Completar el diálogo:
-   - **Tipo**: 1 (Error/reemplazar), 2 (Sin reemplazo), 3 (Devolución)
+   - **Tipo Invalidación**: 1 (Error/reemplazar), 2 (Sin reemplazo), 3 (Devolución)
    - **Motivo**: descripción libre
    - **UUID Reemplazo**: solo para tipos 1 y 3
 4. Confirmar. El formulario mostrará `sv_estado_mh = INVALIDADO`.
@@ -213,3 +213,92 @@ docker exec -w /workspace/dte-gateway dte-gateway pytest -q 2>&1 | tail -5
 ```
 
 Actualmente: **84+ tests** verdes.
+
+---
+
+## 12. Nota de Débito (ND — tipo 06)
+
+### Prerrequisitos:
+- Existe un CCF **PROCESADO** como documento origen.
+- El Customer tiene `sv_nit`, `sv_nrc`, `sv_cod_actividad`, `sv_direccion_*` y `sv_correo` configurados.
+- El Sales Invoice ND debe tener `return_against` apuntando al CCF.
+
+### Pasos:
+1. Crear Sales Invoice con `Is Return = 1` y `Return Against = <nombre-CCF>`.
+2. Seleccionar `sv_dte_document_type = ND`.
+3. Hacer clic en **DTE El Salvador → Emitir DTE**.
+4. Verificar `sv_dte_control_number` empieza con `DTE-06-`.
+
+### Restricción de esta implementación:
+- ND solo puede referenciar CCF (tipo 03). No acepta FE (tipo 01).
+- El schema MH acepta `tipoDocumento = "03"` o `"07"` — nuestra implementación solo usa "03".
+
+### Smoke test ND:
+```bash
+CCF_GEN_CODE=<uuid-del-ccf> bash apps/dte-gateway/tests/smoke/smoke_nd.sh
+```
+
+---
+
+## 13. QR y Print Format
+
+### Configurar URL de verificación MH:
+1. ERPNext → **SV DTE Settings** → campo **URL Consulta Pública MH**.
+2. Ingresar la URL base del portal de verificación del MH (confirmar con documentación oficial antes de producción).
+3. Guardar.
+
+Después de emitir un DTE, el campo `sv_dte_qr_url` se poblará automáticamente con la URL parametrizada.
+
+### Botón "Ver en Hacienda":
+- Aparece en Sales Invoice cuando `sv_dte_qr_url` está poblada.
+- Abre la URL en nueva pestaña.
+
+### Imprimir con Print Format DTE:
+1. Sales Invoice enviada → **Imprimir** → seleccionar **"DTE El Salvador"**.
+2. Incluye: tipo DTE, código generación, N° control, ítems, totales, sello MH.
+3. Si `sv_dte_qr_url` está poblada: se muestra la URL de verificación en el pie.
+4. Imagen QR pendiente para Sprint 7 (requiere confirmar URL oficial MH + elegir librería).
+
+---
+
+## 14. Emisión automática on_submit
+
+### Activar:
+1. ERPNext → **SV DTE Settings** → activar **"Emitir DTE automáticamente al someter"**.
+2. Guardar.
+
+### Comportamiento:
+- Solo aplica a **FE y CCF**. NC, ND, contingencia e invalidación NO se auto-emiten.
+- Si el DTE ya fue emitido (`sv_dte_generation_code` presente): no hace nada (idempotente).
+- En éxito: el `sv_dte_generation_code` aparece al recargar el formulario. Sin popup.
+- En fallo: se registra en **Error Log** (ERPNext → Buscar "Error Log") y aparece un aviso naranja no bloqueante. El submit NO se revierte.
+
+### Diagnóstico de fallo:
+1. ERPNext → **Error Log** → filtrar por `[DTE] Auto-emit fallido`.
+2. El campo `message` contiene la excepción completa.
+3. Corregir la causa y usar **"Emitir DTE"** manualmente.
+
+---
+
+## 15. Checklist Go-Live Producción
+
+### Pre-deploy:
+- [ ] Configurar `DTE_AMBIENTE=01` en `apps/dte-gateway/.env`
+- [ ] Configurar credenciales PROD: `MH_API_PASSWORD`, `FIRMADOR_PASSWORD_PRI`, `NIT_EMISOR`
+- [ ] Confirmar URL del portal de verificación MH y configurar `url_verificacion_mh` en SV DTE Settings
+- [ ] Hacer backup de `dte_store.db` antes de migrar
+- [ ] Ejecutar `bench migrate` en ERPNext
+- [ ] Reiniciar gateway: `docker restart dte-gateway`
+
+### Post-deploy:
+- [ ] Verificar health: `curl http://localhost:8100/health`
+- [ ] Emitir una FE de prueba en ambiente PROD — verificar `sv_estado_mh = PROCESADO`
+- [ ] Monitorear **Error Log** en ERPNext las primeras 24h
+- [ ] Verificar que `sv_dte_qr_url` se genera correctamente (si `url_verificacion_mh` configurada)
+
+### Riesgos documentados:
+| Riesgo | Nivel | Mitigación |
+|--------|-------|------------|
+| URL de verificación MH no confirmada oficialmente | ALTO | No configurar `url_verificacion_mh` hasta confirmar. El campo es opcional — la emisión no depende de él. |
+| `dte_store.db` sin backup automático | MEDIO | Copiar manualmente antes de actualizaciones del gateway |
+| Schema ND (tipo 06) no probado en PROD aún | MEDIO | Probar en amb=00 antes de subir a PROD. Smoke test disponible. |
