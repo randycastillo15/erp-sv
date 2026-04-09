@@ -1,7 +1,7 @@
 # Runbook Operativo — DTE El Salvador
 
 > Sistema de facturación electrónica El Salvador integrado con ERPNext y el DTE Gateway.
-> Revisado: Sprint 6 — Abril 2026.
+> Revisado: Sprint 6 — Abril 2026 (cierre: ND validada en homologación, 90 tests verdes).
 
 ---
 
@@ -212,16 +212,38 @@ docker exec -w /workspace/dte-gateway dte-gateway pytest -q 2>&1 | tail -5
 # Esperado: XX passed, 0 failed
 ```
 
-Actualmente: **84+ tests** verdes.
+Actualmente: **90 tests** verdes (incluye 6 tests de nd_mapper).
 
 ---
 
 ## 12. Nota de Débito (ND — tipo 06)
 
+### Estado de validación (Sprint 6)
+ND fue validada técnicamente en ambiente de homologación: schema local OK, firmador OK, **MH retornó PROCESADO** con sello real. El código (F-1 receptor completo, F-2 `numPagoElectronico`) está funcional. El riesgo residual es exclusivamente de datos maestros (ver checklist abajo).
+
 ### Prerrequisitos:
 - Existe un CCF **PROCESADO** como documento origen.
 - El Customer tiene `sv_nit`, `sv_nrc`, `sv_cod_actividad`, `sv_direccion_*` y `sv_correo` configurados.
 - El Sales Invoice ND debe tener `return_against` apuntando al CCF.
+
+### Checklist de datos maestros antes de emitir ND
+
+> **Crítico**: el schema `fe-nd-v3.json` aplica restricciones de municipio más estrictas que CCF/NC.
+> Un dato inválido produce `HTTP 422` en el gateway, no en MH.
+
+- [ ] `return_against` apunta a un Sales Invoice de tipo CCF (no FE, no NC)
+- [ ] El CCF origen tiene `sv_dte_generation_code` (UUID) y `sv_estado_mh = PROCESADO`
+- [ ] Customer tiene `sv_nit`, `sv_nrc`, `sv_cod_actividad`, `sv_desc_actividad`, `sv_direccion_complemento`
+- [ ] `sv_direccion_departamento` del Customer es un código válido (01-14)
+- [ ] `sv_direccion_municipio` del Customer es compatible con su departamento según schema ND:
+  - Dept 05 (La Libertad): municipio 01-22 (no 23-29)
+  - Dept 01 (Santa Ana): municipio 01-12
+  - Regla general: La Libertad tiene 22 municipios, otros departamentos pueden tener menos
+- [ ] Establecimiento activo en `SV DTE Establishment`: `departamento=05`, `municipio` ≤ 22
+- [ ] `cod_estable_mh` y `cod_punto_venta_mh` coinciden con lo registrado en MH
+
+> **Nota**: CCF/NC aceptan hasta municipio 29 para dept 05; ND solo acepta hasta 22.
+> Si un Customer fue configurado para CCF/NC con municipio 23-29 en dept 05, debe corregirse antes de emitir ND contra él.
 
 ### Pasos:
 1. Crear Sales Invoice con `Is Return = 1` y `Return Against = <nombre-CCF>`.
@@ -232,6 +254,7 @@ Actualmente: **84+ tests** verdes.
 ### Restricción de esta implementación:
 - ND solo puede referenciar CCF (tipo 03). No acepta FE (tipo 01).
 - El schema MH acepta `tipoDocumento = "03"` o `"07"` — nuestra implementación solo usa "03".
+- FE, CCF, NC, invalidación y contingencia no se vieron afectadas por los fixes ND (Sprint 6).
 
 ### Smoke test ND:
 ```bash
@@ -301,4 +324,5 @@ Después de emitir un DTE, el campo `sv_dte_qr_url` se poblará automáticamente
 |--------|-------|------------|
 | URL de verificación MH no confirmada oficialmente | ALTO | No configurar `url_verificacion_mh` hasta confirmar. El campo es opcional — la emisión no depende de él. |
 | `dte_store.db` sin backup automático | MEDIO | Copiar manualmente antes de actualizaciones del gateway |
-| Schema ND (tipo 06) no probado en PROD aún | MEDIO | Probar en amb=00 antes de subir a PROD. Smoke test disponible. |
+| Schema ND (tipo 06) no probado en PROD aún | BAJO | Validada en homologación (Sprint 6): MH procesó con sello real. Probar en amb=00 antes de subir a PROD. Smoke test disponible. |
+| Municipio de Customer incompatible con schema ND | MEDIO | ND exige municipio ≤ 22 para dept 05. Verificar checklist en §12 antes de emitir la primera ND en PROD. No es bug de código. |
