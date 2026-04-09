@@ -288,22 +288,31 @@ Ver §12 para el flujo completo de smoke tests CCF → NC → ND.
 
 ## 14. QR y Print Format
 
-### Configurar URL de verificación MH:
-1. ERPNext → **SV DTE Settings** → campo **URL Consulta Pública MH**.
-2. Ingresar la URL base del portal de verificación del MH (confirmar con documentación oficial antes de producción).
-3. Guardar.
+### Portal de consulta pública MH
 
-Después de emitir un DTE, el campo `sv_dte_qr_url` se poblará automáticamente con la URL parametrizada.
+URL oficial: **https://admin.factura.gob.sv/consultaPublica**
+
+El portal es una SPA Angular que no acepta parámetros en la URL. El usuario debe ingresar manualmente:
+- **Código de Generación**: UUID del DTE (visible en el campo `sv_dte_generation_code` del Sales Invoice)
+- **Fecha de Emisión**: `posting_date` del Sales Invoice
+
+### URL configurada automáticamente (patch v1_8)
+
+El campo `url_verificacion_mh` en SV DTE Settings se configura automáticamente con `https://admin.factura.gob.sv/consultaPublica` al ejecutar `bench migrate`. No requiere configuración manual.
+
+Después de emitir un DTE PROCESADO, el campo `sv_dte_qr_url` se puebla con la URL del portal. El botón **"Ver en Hacienda"** abre el portal en nueva pestaña.
 
 ### Botón "Ver en Hacienda":
-- Aparece en Sales Invoice cuando `sv_dte_qr_url` está poblada.
-- Abre la URL en nueva pestaña.
+1. Click → abre `https://admin.factura.gob.sv/consultaPublica`
+2. Ingresar el **Código Generación** (UUID del DTE, visible en la Sales Invoice)
+3. Ingresar la **Fecha de Emisión** del DTE
+4. Click en Buscar
 
 ### Imprimir con Print Format DTE:
 1. Sales Invoice enviada → **Imprimir** → seleccionar **"DTE El Salvador"**.
-2. Incluye: tipo DTE, código generación, N° control, ítems, totales, sello MH.
-3. Si `sv_dte_qr_url` está poblada: se muestra la URL de verificación en el pie.
-4. Imagen QR pendiente para Sprint 8 (requiere confirmar URL oficial MH + elegir librería).
+2. Incluye: tipo DTE, código generación, N° control, receptor fiscal (CCF/NC/ND), ítems, totales, sello MH.
+3. Sección de verificación al pie: muestra el código de generación y la URL del portal.
+4. Imagen QR pendiente para Sprint 8 (requiere elegir librería + confirmar comportamiento del portal).
 
 ---
 
