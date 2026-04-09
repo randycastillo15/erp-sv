@@ -8,6 +8,7 @@ require_jq
 echo "=== SMOKE: emit CCF (tipo 03) ==="
 
 RECEPTOR_NIT="${CCF_RECEPTOR_NIT:-040010231}"
+RECEPTOR_NRC="${CCF_RECEPTOR_NRC:-3074618}"
 IDEM_KEY="smoke:ccf:$(date +%s)"
 TODAY=$(date +%Y-%m-%d)
 
@@ -22,7 +23,7 @@ PAYLOAD=$(cat <<EOF
   "receptor": {
     "nombre": "RECEPTOR PRUEBA SA DE CV",
     "nit": "$RECEPTOR_NIT",
-    "nrc": "123456",
+    "nrc": "$RECEPTOR_NRC",
     "cod_actividad": "46900",
     "desc_actividad": "Comercio",
     "direccion": {

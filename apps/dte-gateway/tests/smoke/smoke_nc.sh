@@ -14,6 +14,7 @@ echo "=== SMOKE: emit NC (tipo 05) ==="
 
 URL_FIRMADOR="${DTE_FIRMADOR_URL:-http://host.docker.internal:8113/firmardocumento/}"
 RECEPTOR_NIT="${CCF_RECEPTOR_NIT:-040010231}"
+RECEPTOR_NRC="${CCF_RECEPTOR_NRC:-3074618}"
 IDEM_KEY="smoke:nc:$(date +%s)"
 TODAY=$(date +%Y-%m-%d)
 
@@ -28,7 +29,7 @@ PAYLOAD=$(cat <<EOF
   "receptor": {
     "nombre": "RECEPTOR PRUEBA SA DE CV",
     "nit": "$RECEPTOR_NIT",
-    "nrc": "123456",
+    "nrc": "$RECEPTOR_NRC",
     "cod_actividad": "46900",
     "desc_actividad": "Comercio",
     "direccion": {
@@ -58,10 +59,10 @@ PAYLOAD=$(cat <<EOF
   "condicion_operacion": 1,
   "emisor": {
     "nit": "$NIT_EMISOR",
-    "nrc": "2862402",
-    "nombre": "EMPRESA PRUEBA SA DE CV",
-    "cod_actividad": "46900",
-    "desc_actividad": "Venta al por mayor de otros productos",
+    "nrc": "$NRC_EMISOR",
+    "nombre": "EDWIN EDUARDO PALMA ESCOBAR",
+    "cod_actividad": "$COD_ACTIVIDAD",
+    "desc_actividad": "$DESC_ACTIVIDAD",
     "tipo_establecimiento": "02",
     "cod_estable_mh": "M001",
     "cod_punto_venta_mh": "P001",

@@ -1,7 +1,7 @@
 # Runbook Operativo — DTE El Salvador
 
 > Sistema de facturación electrónica El Salvador integrado con ERPNext y el DTE Gateway.
-> Revisado: Sprint 6 — Abril 2026 (cierre: ND validada en homologación, 90 tests verdes).
+> Revisado: Sprint 7 — Abril 2026 (consolidación: Print Format receptor fiscal, checklists operativos, smoke CCF/NC/ND PROCESADO).
 
 ---
 
@@ -216,7 +216,28 @@ Actualmente: **90 tests** verdes (incluye 6 tests de nd_mapper).
 
 ---
 
-## 12. Nota de Débito (ND — tipo 06)
+## 12. Smoke tests individuales CCF / NC / ND
+
+Los smoke tests de CCF, NC y ND requieren datos reales registrados en MH. Los valores por defecto (`common.sh`) corresponden al NIT/NRC del emisor del entorno de desarrollo.
+
+```bash
+# CCF (standalone)
+bash apps/dte-gateway/tests/smoke/smoke_ccf.sh
+# Exporta: GEN_CODE_CCF=<uuid>
+
+# NC (requiere CCF_GEN_CODE del paso anterior)
+CCF_GEN_CODE=<uuid-del-ccf> bash apps/dte-gateway/tests/smoke/smoke_nc.sh
+
+# ND (requiere un CCF nuevo — no usar el mismo CCF que ya tiene una NC)
+bash apps/dte-gateway/tests/smoke/smoke_ccf.sh   # nuevo CCF
+CCF_GEN_CODE=<uuid-nuevo-ccf> bash apps/dte-gateway/tests/smoke/smoke_nd.sh
+```
+
+> **Nota**: El NRC del receptor por defecto (`CCF_RECEPTOR_NRC=3074618`) corresponde al Customer "Grant Plastics Ltd." en el entorno de desarrollo. Para cambiar el receptor en otro entorno, pasar `CCF_RECEPTOR_NIT` y `CCF_RECEPTOR_NRC` como env vars.
+
+---
+
+## 13. Nota de Débito (ND — tipo 06)
 
 ### Estado de validación (Sprint 6)
 ND fue validada técnicamente en ambiente de homologación: schema local OK, firmador OK, **MH retornó PROCESADO** con sello real. El código (F-1 receptor completo, F-2 `numPagoElectronico`) está funcional. El riesgo residual es exclusivamente de datos maestros (ver checklist abajo).
@@ -261,9 +282,11 @@ ND fue validada técnicamente en ambiente de homologación: schema local OK, fir
 CCF_GEN_CODE=<uuid-del-ccf> bash apps/dte-gateway/tests/smoke/smoke_nd.sh
 ```
 
+Ver §12 para el flujo completo de smoke tests CCF → NC → ND.
+
 ---
 
-## 13. QR y Print Format
+## 14. QR y Print Format
 
 ### Configurar URL de verificación MH:
 1. ERPNext → **SV DTE Settings** → campo **URL Consulta Pública MH**.
@@ -280,11 +303,11 @@ Después de emitir un DTE, el campo `sv_dte_qr_url` se poblará automáticamente
 1. Sales Invoice enviada → **Imprimir** → seleccionar **"DTE El Salvador"**.
 2. Incluye: tipo DTE, código generación, N° control, ítems, totales, sello MH.
 3. Si `sv_dte_qr_url` está poblada: se muestra la URL de verificación en el pie.
-4. Imagen QR pendiente para Sprint 7 (requiere confirmar URL oficial MH + elegir librería).
+4. Imagen QR pendiente para Sprint 8 (requiere confirmar URL oficial MH + elegir librería).
 
 ---
 
-## 14. Emisión automática on_submit
+## 15. Emisión automática on_submit
 
 ### Activar:
 1. ERPNext → **SV DTE Settings** → activar **"Emitir DTE automáticamente al someter"**.
@@ -303,15 +326,41 @@ Después de emitir un DTE, el campo `sv_dte_qr_url` se poblará automáticamente
 
 ---
 
-## 15. Checklist Go-Live Producción
+## 16. Checklist emisión manual
+
+Antes de emitir cualquier DTE desde la UI:
+
+- [ ] Sales Invoice en estado **Enviada** (docstatus=1)
+- [ ] `sv_dte_document_type` seleccionado (FE / CCF / NC / ND)
+- [ ] Para CCF/NC/ND: Customer tiene `sv_nit`, `sv_nrc`, `sv_cod_actividad`, `sv_desc_actividad`, `sv_direccion_*` y `sv_correo` configurados
+- [ ] Para NC/ND: `return_against` apunta a un CCF **PROCESADO** con `sv_dte_generation_code` presente
+- [ ] Para ND: `sv_direccion_municipio` del Customer ≤ 22 si `sv_direccion_departamento=05` (ver §13)
+- [ ] Gateway online: `curl http://localhost:8100/health`
+- [ ] Firmador online y certificado vigente
+
+---
+
+## 17. Checklist emisión automática on_submit
+
+- [ ] `emitir_al_someter=1` activado en **SV DTE Settings**
+- [ ] Solo aplica a **FE y CCF** — NC y ND requieren emisión manual
+- [ ] Si el DTE ya fue emitido (`sv_dte_generation_code` presente): no re-emite (idempotente)
+- [ ] En fallo: **Error Log** → filtrar `[DTE] Auto-emit fallido` → corregir causa → usar "Emitir DTE" manual
+- [ ] El submit **no se bloquea** aunque la emisión falle — el documento queda enviado sin DTE
+
+---
+
+## 18. Checklist Go-Live Producción
 
 ### Pre-deploy:
 - [ ] Configurar `DTE_AMBIENTE=01` en `apps/dte-gateway/.env`
 - [ ] Configurar credenciales PROD: `MH_API_PASSWORD`, `FIRMADOR_PASSWORD_PRI`, `NIT_EMISOR`
-- [ ] Confirmar URL del portal de verificación MH y configurar `url_verificacion_mh` en SV DTE Settings
+- [ ] Confirmar URL oficial del portal de verificación MH y configurar `url_verificacion_mh` en SV DTE Settings
 - [ ] Hacer backup de `dte_store.db` antes de migrar
 - [ ] Ejecutar `bench migrate` en ERPNext
 - [ ] Reiniciar gateway: `docker restart dte-gateway`
+- [ ] Verificar municipio de todos los Customers con `sv_direccion_departamento=05` — deben tener municipio ≤ 22 si emitirán ND (ver §13)
+- [ ] Hacer benchmark en amb=00: emitir FE + CCF + NC + ND antes de subir a amb=01
 
 ### Post-deploy:
 - [ ] Verificar health: `curl http://localhost:8100/health`
@@ -319,10 +368,23 @@ Después de emitir un DTE, el campo `sv_dte_qr_url` se poblará automáticamente
 - [ ] Monitorear **Error Log** en ERPNext las primeras 24h
 - [ ] Verificar que `sv_dte_qr_url` se genera correctamente (si `url_verificacion_mh` configurada)
 
+### Backup y rollback:
+
+```bash
+# Backup gateway store (antes de cada actualización)
+cp apps/dte-gateway/dte_store.db backups/dte_store_$(date +%Y%m%d).db
+
+# Rollback gateway (stateless config — solo reiniciar con imagen anterior)
+docker restart dte-gateway
+
+# Rollback ERPNext patch (si bench migrate falla)
+bench --site development.localhost migrate --rollback
+```
+
 ### Riesgos documentados:
 | Riesgo | Nivel | Mitigación |
 |--------|-------|------------|
 | URL de verificación MH no confirmada oficialmente | ALTO | No configurar `url_verificacion_mh` hasta confirmar. El campo es opcional — la emisión no depende de él. |
 | `dte_store.db` sin backup automático | MEDIO | Copiar manualmente antes de actualizaciones del gateway |
 | Schema ND (tipo 06) no probado en PROD aún | BAJO | Validada en homologación (Sprint 6): MH procesó con sello real. Probar en amb=00 antes de subir a PROD. Smoke test disponible. |
-| Municipio de Customer incompatible con schema ND | MEDIO | ND exige municipio ≤ 22 para dept 05. Verificar checklist en §12 antes de emitir la primera ND en PROD. No es bug de código. |
+| Municipio de Customer incompatible con schema ND | MEDIO | ND exige municipio ≤ 22 para dept 05. Verificar checklist en §13 antes de emitir la primera ND en PROD. No es bug de código. |
