@@ -2,6 +2,7 @@
 Router DTE v2 — endpoints tipados con integración real MH.
 """
 from fastapi import APIRouter, HTTPException
+from requests.exceptions import HTTPError as RequestsHTTPError
 
 from app.models.dte_request import DTEEmitRequest, DTEStatusRequest
 from app.models.dte_response import DTEEmitResponse
@@ -24,7 +25,7 @@ def emit_dte_v2(request: DTEEmitRequest) -> DTEEmitResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
+    except (RuntimeError, RequestsHTTPError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
