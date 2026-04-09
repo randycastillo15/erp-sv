@@ -19,5 +19,3 @@ class DTEEmitResponse(BaseModel):
     clasifica_msg: Optional[str] = None
     codigo_msg: Optional[str] = None
     observaciones: list[str] = []
-    # Campo legacy — mantenido por compat con mock y api/dte.py v1.0
-    uuid_dte: Optional[str] = None

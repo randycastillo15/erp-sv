@@ -110,7 +110,6 @@ def emit(request: DTEEmitRequest) -> DTEEmitResponse:
             status="procesado" if estado == "PROCESADO" else "rechazado",
             mode="live",
             generation_code=gen_code,
-            uuid_dte=gen_code,
             control_number=num_ctrl,
             estado=estado,
             sello_recibido=mh_resp.get("selloRecibido"),
