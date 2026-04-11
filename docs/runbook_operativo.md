@@ -1,7 +1,7 @@
 # Runbook Operativo — DTE El Salvador
 
 > Sistema de facturación electrónica El Salvador integrado con ERPNext y el DTE Gateway.
-> Revisado: Sprint 7 — Abril 2026 (consolidación: Print Format receptor fiscal, checklists operativos, smoke CCF/NC/ND PROCESADO).
+> Revisado: Sprint 8 — Abril 2026 (rollover anual de secuenciales, aislamiento test/prod, limpieza custom fields, QR parametrizado).
 
 ---
 
@@ -212,7 +212,7 @@ docker exec -w /workspace/dte-gateway dte-gateway pytest -q 2>&1 | tail -5
 # Esperado: XX passed, 0 failed
 ```
 
-Actualmente: **90 tests** verdes (incluye 6 tests de nd_mapper).
+Actualmente: **97 tests** verdes (incluye 6 tests de nd_mapper, 7 tests de rollover anual de secuenciales).
 
 ---
 
@@ -290,33 +290,93 @@ Ver §12 para el flujo completo de smoke tests CCF → NC → ND.
 
 ### Portal de consulta pública MH
 
-URL oficial: **https://admin.factura.gob.sv/consultaPublica**
+URL oficial con parámetros: **`https://admin.factura.gob.sv/consultaPublica?ambiente={00|01}&codGen={UUID}&fechaEmi={YYYY-MM-DD}`**
 
-El portal es una SPA Angular que no acepta parámetros en la URL. El usuario debe ingresar manualmente:
-- **Código de Generación**: UUID del DTE (visible en el campo `sv_dte_generation_code` del Sales Invoice)
-- **Fecha de Emisión**: `posting_date` del Sales Invoice
+El portal acepta los tres parámetros directamente en la URL (confirmado funcional en homologación). El campo `sv_dte_qr_url` se puebla automáticamente en cada emisión PROCESADA con esta URL completa. El botón **"Ver en Hacienda"** abre el DTE directamente en el portal sin necesidad de ingresar datos manualmente.
 
-### URL configurada automáticamente (patch v1_8)
+### Formato de URL parametrizada (v1_27+)
 
-El campo `url_verificacion_mh` en SV DTE Settings se configura automáticamente con `https://admin.factura.gob.sv/consultaPublica` al ejecutar `bench migrate`. No requiere configuración manual.
+```
+https://admin.factura.gob.sv/consultaPublica
+  ?ambiente=00           ← 00=pruebas, 01=producción
+  &codGen=<UUID>         ← sv_dte_generation_code
+  &fechaEmi=2026-04-10   ← posting_date del Sales Invoice
+```
 
-Después de emitir un DTE PROCESADO, el campo `sv_dte_qr_url` se puebla con la URL del portal. El botón **"Ver en Hacienda"** abre el portal en nueva pestaña.
+La URL se construye en `api/dte.py` usando `MH_QR_URL` de `config/sv_fiscal_constants.py`.
 
 ### Botón "Ver en Hacienda":
-1. Click → abre `https://admin.factura.gob.sv/consultaPublica`
-2. Ingresar el **Código Generación** (UUID del DTE, visible en la Sales Invoice)
-3. Ingresar la **Fecha de Emisión** del DTE
-4. Click en Buscar
+1. Click → abre directamente la consulta del DTE en el portal MH (nueva pestaña).
+2. No se requiere ingresar datos manualmente si `sv_dte_qr_url` está poblado.
 
 ### Imprimir con Print Format DTE:
 1. Sales Invoice enviada → **Imprimir** → seleccionar **"DTE El Salvador"**.
 2. Incluye: tipo DTE, código generación, N° control, receptor fiscal (CCF/NC/ND), ítems, totales, sello MH.
 3. Sección de verificación al pie: muestra el código de generación y la URL del portal.
-4. Imagen QR pendiente para Sprint 8 (requiere elegir librería + confirmar comportamiento del portal).
+4. Imagen QR pendiente (requiere elegir librería Frappe-compatible).
 
 ---
 
-## 15. Emisión automática on_submit
+## 15. Secuenciales y ejercicio impositivo
+
+### Clave de secuencia
+
+El `numeroControl` (ej. `DTE-01-M001-P001-000000000000038`) incluye un consecutivo que el gateway genera y persiste en `dte_store.db`. La clave de unicidad es:
+
+```
+(tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio)
+```
+
+| Campo | Valores | Significado |
+|-------|---------|-------------|
+| `tipo_dte` | `01`, `03`, `05`, `06` | FE, CCF, NC, ND — secuencias independientes |
+| `cod_estable_mh` | ej. `M001` | Establecimiento MH |
+| `cod_punto_venta_mh` | ej. `P001` | Punto de venta MH |
+| `ambiente` | `00` = pruebas, `01` = producción | **Contadores totalmente separados** |
+| `ejercicio` | año del `posting_date` | **Reinicio automático al inicio de cada año fiscal** |
+
+### Reinicio anual (rollover)
+
+Al inicio de cada ejercicio impositivo (año calendario), el consecutivo reinicia a 1 automáticamente. No hay configuración — es implícito en la clave.
+
+- Emisiones en 2025: usan su propia secuencia (ej. FE llega a 100).
+- Primera FE de 2026: consecutivo = 1, independiente del contador 2025.
+- Un documento con `posting_date = 2025-12-31` enviado el 1-ene-2026 **usa la secuencia de 2025** (ejercicio se deriva de `posting_date`, no del reloj del servidor).
+
+### Aislamiento test / producción
+
+Las secuencias de `ambiente=00` y `ambiente=01` son completamente independientes:
+- Emitir 500 DTEs de prueba (amb=00) **no consume** secuenciales de producción.
+- No hay riesgo de "quemar" números en producción durante desarrollo.
+
+### Huecos en la secuencia
+
+El consecutivo **no se revierte** si la operación falla después de asignarse (firma, MH o red). Los huecos son aceptables per normativa MH — el MH no exige consecutivos sin saltos.
+
+### Backfill y migración automática
+
+Si `dte_store.db` tiene el schema v1 (sin columna `ambiente`, con columna `year`), la migración a v2 se ejecuta automáticamente en el primer arranque del gateway:
+- Todos los registros v1 se asignan a `ambiente='00'` (backfill conservador).
+- Los secuenciales existentes se preservan sin pérdida.
+- La migración es atómica (CREATE → INSERT SELECT → DROP → RENAME).
+
+### Verificar secuenciales actuales
+
+```bash
+docker exec dte-gateway python3 -c "
+import sqlite3
+conn = sqlite3.connect('/app/data/dte_store.db')
+rows = conn.execute(
+    'SELECT tipo_dte, ambiente, ejercicio, secuencial FROM sequences ORDER BY ejercicio, tipo_dte'
+).fetchall()
+for r in rows:
+    print(r)
+"
+```
+
+---
+
+## 16. Emisión automática on_submit
 
 ### Activar:
 1. ERPNext → **SV DTE Settings** → activar **"Emitir DTE automáticamente al someter"**.
@@ -335,7 +395,7 @@ Después de emitir un DTE PROCESADO, el campo `sv_dte_qr_url` se puebla con la U
 
 ---
 
-## 16. Checklist emisión manual
+## 17. Checklist emisión manual
 
 Antes de emitir cualquier DTE desde la UI:
 
@@ -349,7 +409,7 @@ Antes de emitir cualquier DTE desde la UI:
 
 ---
 
-## 17. Checklist emisión automática on_submit
+## 18. Checklist emisión automática on_submit
 
 - [ ] `emitir_al_someter=1` activado en **SV DTE Settings**
 - [ ] Solo aplica a **FE y CCF** — NC y ND requieren emisión manual
@@ -359,17 +419,18 @@ Antes de emitir cualquier DTE desde la UI:
 
 ---
 
-## 18. Checklist Go-Live Producción
+## 19. Checklist Go-Live Producción
 
 ### Pre-deploy:
 - [ ] Configurar `DTE_AMBIENTE=01` en `apps/dte-gateway/.env`
 - [ ] Configurar credenciales PROD: `MH_API_PASSWORD`, `FIRMADOR_PASSWORD_PRI`, `NIT_EMISOR`
 - [ ] Confirmar URL oficial del portal de verificación MH y configurar `url_verificacion_mh` en SV DTE Settings
-- [ ] Hacer backup de `dte_store.db` antes de migrar
+- [ ] Hacer backup de `dte_store.db` antes de migrar (incluye todos los secuenciales por ejercicio)
 - [ ] Ejecutar `bench migrate` en ERPNext
 - [ ] Reiniciar gateway: `docker restart dte-gateway`
 - [ ] Verificar municipio de todos los Customers con `sv_direccion_departamento=05` — deben tener municipio ≤ 22 si emitirán ND (ver §13)
 - [ ] Hacer benchmark en amb=00: emitir FE + CCF + NC + ND antes de subir a amb=01
+- [ ] Si el Go-Live ocurre cerca del 31 de diciembre / 1 de enero: verificar que `posting_date` esté correcto en los documentos (el ejercicio se deriva de `posting_date.year`, no del reloj del servidor — ver §15)
 
 ### Post-deploy:
 - [ ] Verificar health: `curl http://localhost:8100/health`
@@ -397,3 +458,4 @@ bench --site development.localhost migrate --rollback
 | `dte_store.db` sin backup automático | MEDIO | Copiar manualmente antes de actualizaciones del gateway |
 | Schema ND (tipo 06) no probado en PROD aún | BAJO | Validada en homologación (Sprint 6): MH procesó con sello real. Probar en amb=00 antes de subir a PROD. Smoke test disponible. |
 | Municipio de Customer incompatible con schema ND | MEDIO | ND exige municipio ≤ 22 para dept 05. Verificar checklist en §13 antes de emitir la primera ND en PROD. No es bug de código. |
+| Cambio de ejercicio (31-dic / 1-ene) | BAJO | El consecutivo reinicia automáticamente a 1 para el nuevo ejercicio. `posting_date` debe estar correcto en los documentos — un doc de dic-2025 enviado en ene-2026 continúa la secuencia 2025. Ver §15. |

@@ -9,6 +9,10 @@ Diseño:
   - SQLite WAL mode para mejor concurrencia de lectura.
   - Secuencial NO se revierte si la operación posterior falla (huecos son aceptables per MH).
   - Idempotency incluye payload_hash para detectar colisiones (misma key, payload diferente).
+  - Clave de secuencia: (tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio)
+    · ambiente separa test (00) de producción (01) — no comparten contadores.
+    · ejercicio = año del posting_date del documento (fecha fiscal, no reloj del servidor).
+    · Reinicio automático al inicio de cada ejercicio impositivo (año calendario).
 """
 
 import hashlib
@@ -39,18 +43,62 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_sequences_v2(conn: sqlite3.Connection) -> None:
+    """
+    Migración única: añade columnas 'ambiente' y renombra 'year' → 'ejercicio'
+    en la tabla sequences.
+
+    Antes (v1): PRIMARY KEY (tipo_dte, cod_estable_mh, cod_punto_venta_mh, year)
+    Después (v2): PRIMARY KEY (tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio)
+
+    Backfill: todos los registros existentes son del ambiente '00' (pruebas).
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sequences)").fetchall()}
+    if "ambiente" in cols:
+        return  # ya migrado
+
+    logger.info("dte_store: migrando tabla sequences a v2 (+ ambiente + ejercicio)")
+    conn.execute("""
+        CREATE TABLE sequences_v2 (
+            tipo_dte           TEXT NOT NULL,
+            cod_estable_mh     TEXT NOT NULL,
+            cod_punto_venta_mh TEXT NOT NULL,
+            ambiente           TEXT NOT NULL,
+            ejercicio          INTEGER NOT NULL,
+            secuencial         INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio)
+        )
+    """)
+    # Backfill: los datos existentes son del entorno de pruebas (ambiente='00').
+    # La columna 'year' se mapea a 'ejercicio'.
+    if "year" in cols:
+        conn.execute("""
+            INSERT INTO sequences_v2
+                (tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio, secuencial)
+            SELECT tipo_dte, cod_estable_mh, cod_punto_venta_mh, '00', year, secuencial
+            FROM sequences
+        """)
+    conn.execute("DROP TABLE sequences")
+    conn.execute("ALTER TABLE sequences_v2 RENAME TO sequences")
+    logger.info("dte_store: migración sequences v2 completada")
+
+
 def _init_db() -> None:
     with _get_conn() as conn:
+        # Crear tabla sequences si no existe (schema v2 directamente)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sequences (
                 tipo_dte           TEXT NOT NULL,
                 cod_estable_mh     TEXT NOT NULL,
                 cod_punto_venta_mh TEXT NOT NULL,
-                year               INTEGER NOT NULL,
+                ambiente           TEXT NOT NULL,
+                ejercicio          INTEGER NOT NULL,
                 secuencial         INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (tipo_dte, cod_estable_mh, cod_punto_venta_mh, year)
+                PRIMARY KEY (tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio)
             )
         """)
+        # Migración desde v1 (sin ambiente) si la tabla ya existía con el schema anterior
+        _migrate_sequences_v2(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS idempotency (
                 key             TEXT PRIMARY KEY,
@@ -93,26 +141,45 @@ _init_db()
 # Secuenciales
 # ---------------------------------------------------------------------------
 
-def next_secuencial(tipo_dte: str, cod_estable_mh: str, cod_punto_venta_mh: str) -> int:
+def next_secuencial(
+    tipo_dte: str,
+    cod_estable_mh: str,
+    cod_punto_venta_mh: str,
+    ambiente: str,
+    ejercicio: int,
+) -> int:
     """
     Retorna el siguiente número secuencial para la combinación dada.
-    Thread-safe. Reinicia cada año calendario.
-    El secuencial NO se revierte si la operación posterior falla.
+
+    Thread-safe. La secuencia reinicia al inicio de cada ejercicio impositivo
+    (año fiscal derivado de posting_date del documento, no del reloj del servidor).
+
+    Args:
+        tipo_dte:           "01", "03", "05", "06", etc.
+        cod_estable_mh:     Código establecimiento MH (4 chars, ej. "M001").
+        cod_punto_venta_mh: Código punto de venta MH (4 chars, ej. "P001").
+        ambiente:           "00"=pruebas, "01"=producción.
+        ejercicio:          Año fiscal del documento (posting_date.year).
+
+    Returns:
+        Entero ≥ 1, único dentro de la combinación (tipo, estable, pv, ambiente, ejercicio).
+        El secuencial NO se revierte si la operación posterior falla (huecos aceptables per MH).
     """
-    year = datetime.now(timezone.utc).year
     with _LOCK:
         with _get_conn() as conn:
             conn.execute("""
-                INSERT INTO sequences (tipo_dte, cod_estable_mh, cod_punto_venta_mh, year, secuencial)
-                VALUES (?, ?, ?, ?, 1)
-                ON CONFLICT(tipo_dte, cod_estable_mh, cod_punto_venta_mh, year)
+                INSERT INTO sequences
+                    (tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio, secuencial)
+                VALUES (?, ?, ?, ?, ?, 1)
+                ON CONFLICT(tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio)
                 DO UPDATE SET secuencial = secuencial + 1
-            """, (tipo_dte, cod_estable_mh, cod_punto_venta_mh, year))
+            """, (tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio))
             conn.commit()
             row = conn.execute("""
                 SELECT secuencial FROM sequences
-                WHERE tipo_dte=? AND cod_estable_mh=? AND cod_punto_venta_mh=? AND year=?
-            """, (tipo_dte, cod_estable_mh, cod_punto_venta_mh, year)).fetchone()
+                WHERE tipo_dte=? AND cod_estable_mh=? AND cod_punto_venta_mh=?
+                  AND ambiente=? AND ejercicio=?
+            """, (tipo_dte, cod_estable_mh, cod_punto_venta_mh, ambiente, ejercicio)).fetchone()
     return row[0]
 
 

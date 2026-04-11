@@ -60,8 +60,18 @@ def emit(request: DTEEmitRequest) -> DTEEmitResponse:
 
     try:
         # 1. Identificadores
+        # ejercicio_impositivo = año fiscal del documento (posting_date), no del reloj del servidor.
+        # Garantiza que un doc fiscal 2025-12-31 enviado el 1-ene-2026 obtenga secuencial de 2025.
+        ejercicio = request.posting_date.year
+
         gen_code = generate_codigo_generacion()
-        secuencial = next_secuencial(request.tipo_dte, s.cod_estable_mh, s.cod_punto_venta_mh)
+        secuencial = next_secuencial(
+            request.tipo_dte,
+            s.cod_estable_mh,
+            s.cod_punto_venta_mh,
+            request.ambiente,
+            ejercicio,
+        )
         num_ctrl = generate_numero_control(
             tipo_dte=request.tipo_dte,
             cod_estable_mh=s.cod_estable_mh,
