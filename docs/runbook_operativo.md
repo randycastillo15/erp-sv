@@ -459,3 +459,96 @@ bench --site development.localhost migrate --rollback
 | Schema ND (tipo 06) no probado en PROD aún | BAJO | Validada en homologación (Sprint 6): MH procesó con sello real. Probar en amb=00 antes de subir a PROD. Smoke test disponible. |
 | Municipio de Customer incompatible con schema ND | MEDIO | ND exige municipio ≤ 22 para dept 05. Verificar checklist en §13 antes de emitir la primera ND en PROD. No es bug de código. |
 | Cambio de ejercicio (31-dic / 1-ene) | BAJO | El consecutivo reinicia automáticamente a 1 para el nuevo ejercicio. `posting_date` debe estar correcto en los documentos — un doc de dic-2025 enviado en ene-2026 continúa la secuencia 2025. Ver §15. |
+
+---
+
+## 20. Roles y privilegios DTE (Sprint 9)
+
+El módulo usa cuatro roles **aditivos** a los roles ERPNext existentes. Un usuario necesita su rol ERPNext normal **más** un rol DTE.
+
+Ejemplo: `Accounts User + DTE Operador` → puede emitir DTEs.
+
+### Roles disponibles
+
+| Rol | Propósito |
+|-----|-----------|
+| **DTE Admin** | Configurar SV DTE Settings, establecimientos y catálogos. No invalida. |
+| **DTE Responsable** | Emitir, invalidar DTEs y emitir contingencias. Requiere `sv_tipo_doc_responsable` + `sv_num_doc_responsable` en su perfil de usuario. |
+| **DTE Operador** | Emitir DTEs y consultar estados MH. No invalida ni contingencias. |
+| **DTE Auditor** | Solo lectura + exportación de SV DTE Document y SV DTE Log. |
+
+### Permisos por DocType
+
+| DocType | DTE Admin | DTE Responsable | DTE Operador | DTE Auditor |
+|---------|-----------|-----------------|--------------|-------------|
+| SV DTE Settings | R+W | — | — | — |
+| SV DTE Establishment | R+W+C+D | R | R | R |
+| SV DTE Document | R | R | R | R+Export |
+| SV DTE Log | R | R | R | R+Export |
+| SV Tipo Documento | R+W+C+D | R | R | R |
+| SV Actividad Economica | R+W+C+D | R | R | R |
+| SV Departamento | R+W+C+D | R | R | R |
+| SV Municipio | R+W+C+D | R | R | R |
+| SV Distrito | R+W+C+D | R | R | R |
+
+### Guards de API (server-side)
+
+| Endpoint | DTE Admin | DTE Responsable | DTE Operador | DTE Auditor |
+|----------|-----------|-----------------|--------------|-------------|
+| `emit_dte()` | ✅ | ✅ | ✅ | ❌ |
+| `get_dte_status()` | ✅ | ✅ | ✅ | ✅ |
+| `refresh_dte_status()` | ✅ | ✅ | ✅ | ✅ |
+| `ping_gateway()` | ✅ | ✅ | ✅ | ❌ |
+| `anular_dte()` | ❌ | ✅ | ❌ | ❌ |
+| `emit_contingencia()` | ❌ | ✅ | ❌ | ❌ |
+
+> DTE Admin puede configurar el sistema pero no invalida — la invalidación exige datos personales del responsable fiscal (tipo y número de documento) que deben estar en el perfil del usuario que realiza la operación.
+
+### Botones visibles por rol (Sales Invoice / SV DTE Document)
+
+| Botón | Roles que lo ven |
+|-------|-----------------|
+| Emitir DTE | DTE Operador, DTE Responsable, DTE Admin |
+| Re-emitir DTE | DTE Operador, DTE Responsable, DTE Admin |
+| Consultar Estado MH | DTE Operador, DTE Responsable, DTE Admin, DTE Auditor |
+| Ver Detalle DTE | DTE Operador, DTE Responsable, DTE Admin, DTE Auditor |
+| Ver en Hacienda | DTE Operador, DTE Responsable, DTE Admin, DTE Auditor |
+| Invalidar DTE | DTE Responsable (exclusivo) |
+
+### Asignar roles en ERPNext
+
+```
+Configuración → Usuarios → [usuario] → Pestaña Roles → agregar rol DTE
+```
+
+O vía consola:
+```bash
+docker exec -w /workspace/development/frappe-bench erpnext_devcontainer-frappe-1 \
+  bench --site development.localhost execute frappe.db.sql \
+  --args '"INSERT INTO \`tabHas Role\` (name,parent,parenttype,parentfield,role) VALUES (UUID(),\"usuario@empresa.com\",\"User\",\"roles\",\"DTE Operador\")"'
+```
+
+### Configurar DTE Responsable (datos para invalidación)
+
+El usuario responsable debe tener en su perfil (Configuración → Usuarios → [usuario]):
+
+- **Tipo Documento Responsable**: seleccionar de catálogo (ej. `13 — DUI`)
+- **Número Documento Responsable**: el número del documento (ej. `061172006`)
+
+Sin estos campos, `anular_dte()` lanzará error aunque el usuario tenga el rol DTE Responsable.
+
+### Notas sobre el usuario Administrator
+
+- `Administrator` recibe automáticamente: DTE Admin + DTE Operador + DTE Responsable (vía patches v1_30/v1_31).
+- En desarrollo, Administrator actúa como superusuario (ignora guards de rol). Los guards aplican efectivamente a usuarios normales.
+
+### Patches aplicados
+
+| Patch | Descripción |
+|-------|-------------|
+| `v1_30.add_sv_tipo_documento_doctype` | CAT-22 tipos de documento de identidad |
+| `v1_30.add_dte_responsable_role` | Crea rol DTE Responsable |
+| `v1_30.add_user_responsable_fields` | Campos tipo/num documento en perfil User |
+| `v1_30.drop_settings_responsable_fields` | Elimina sección Responsable de SV DTE Settings |
+| `v1_31.add_dte_roles` | Crea DTE Admin, DTE Operador, DTE Auditor |
+| `v1_31.add_dte_role_permissions` | Matriz de permisos DocType para los 4 roles |
